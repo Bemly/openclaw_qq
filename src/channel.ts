@@ -4023,10 +4023,16 @@ ${current}
                                 );
                                 console.log(`[QQ] visionModel routing: ${imageCount} image(s) detected, mode=${config.visionModelMode || "always"}, chain=${visionModelList.join(" → ")} → ${rawModelConfig.primary || "primary"}`);
                                 // Force vision model to describe images before replying
-                                // Inject at end of body (closest to generation) for maximum weight
                                 const visionPrompt = config.visionModelPrompt || "";
                                 if (visionPrompt) {
-                                    mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
+                                    if (config.visionModelStripSystemPrompt) {
+                                        // Strip character system prompt, keep only visionPrompt
+                                        mergedCtx.Body = mergedCtx.Body.replace(/<system>[\s\S]*?<\/system>\s*/g, "");
+                                        mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
+                                    } else {
+                                        // Append visionPrompt as additional <system> block
+                                        mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
+                                    }
                                 }
                             }
 
