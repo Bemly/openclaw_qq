@@ -3603,7 +3603,6 @@ ${current}
                         for (let i = 0; i < chunks.length; i++) {
                             if (currentRunState?.isStale()) return i > 0;
                             let chunk = chunks[i];
-                            if (isGroup && i === 0) chunk = `[CQ:at,qq=${userId}] ${chunk}`;
 
                             if (isGroup) client.sendGroupMsg(groupId, chunk);
                             else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunk);
