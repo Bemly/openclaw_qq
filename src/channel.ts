@@ -3992,7 +3992,41 @@ ${current}
                                 { primary: "", fallbacks: [] as string[] };
                             const fallbacks = rawModelConfig.fallbacks;
 
-                            const modelsToTry = [null, ...fallbacks];
+                            // Vision model chain routing for image messages
+                            const visionModelList = config.visionModel
+                                ? config.visionModel.split(",").map((s: string) => s.trim()).filter(Boolean)
+                                : [];
+                            const hasInboundImages = inboundMediaUrls.length > 0
+                                || (Array.isArray(mergedCtx?.MediaUrls) && mergedCtx.MediaUrls.length > 0)
+                                || (Array.isArray(mergedCtx?.MediaPaths) && mergedCtx.MediaPaths.length > 0);
+                            const shouldUseVisionModel = (() => {
+                                if (visionModelList.length === 0) return false;
+                                if (!hasInboundImages) return false;
+                                if (config.visionModelMode === "always") return true;
+                                if (config.visionModelMode === "non_multimodal" || !config.visionModelMode) {
+                                    const primaryModel = rawModelConfig.primary.toLowerCase();
+                                    const multimodalPatterns = [
+                                        "gpt-4o", "gpt-4.1", "gpt-5", "claude", "gemini",
+                                        "glm-4v", "qwen-vl", "yi-vision", "hunyuan-vision",
+                                        "minimax", "step"
+                                    ];
+                                    const isMultimodal = multimodalPatterns.some(p => primaryModel.includes(p));
+                                    return !isMultimodal;
+                                }
+                                return false;
+                            })();
+                            if (shouldUseVisionModel) {
+                                const imageCount = Math.max(
+                                    inboundMediaUrls.length,
+                                    Array.isArray(mergedCtx?.MediaUrls) ? mergedCtx.MediaUrls.length : 0,
+                                    Array.isArray(mergedCtx?.MediaPaths) ? mergedCtx.MediaPaths.length : 0
+                                );
+                                console.log(`[QQ] visionModel routing: ${imageCount} image(s) detected, mode=${config.visionModelMode || "always"}, chain=${visionModelList.join(" → ")} → ${rawModelConfig.primary || "primary"}`);
+                            }
+
+                            const modelsToTry = shouldUseVisionModel
+                                ? [...visionModelList, null, ...fallbacks]
+                                : [null, ...fallbacks];
                             let globalDispatchError: any = null;
 
                             out_loop:

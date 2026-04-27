@@ -103,6 +103,8 @@ export const QQConfigSchema = z.object({
   enableGuilds: BooleanInputSchema(true).describe("是否启用 QQ 频道（Guild）支持。"),
   enrichReplyForwardContext: BooleanInputSchema(true).describe("是否递归解析 reply/forward 并注入多层上下文。默认开启。"),
   cacheInboundImagesToLocal: BooleanInputSchema(true).describe("是否将当前消息以及引用/转发上下文里识别到的图片缓存到本地 MediaPaths。默认开启，便于 ACP 与多模态 agent 实际读图。关闭后遇到图片消息直接跳过不回复。"),
+  visionModel: IdListStringSchema.describe("视觉模型链（逗号分隔 provider/model），消息含图片时依次尝试，遇到限额跳过下一个，全部失败回退主模型。如：openai/gpt-4o-mini, anthropic/claude-haiku-4-5。"),
+  visionModelMode: z.preprocess((value) => normalizeLooseString(value)?.toLowerCase(), z.enum(["always", "non_multimodal"]).optional().default("always")).describe("视觉模型触发模式。always: 所有含图消息都走视觉模型链；non_multimodal: 仅主模型非多模态时。"),
   blockStreaming: BooleanInputSchema(true).describe("是否按 assistant message 分块发送回复。默认开启，推荐配合 message_end，让 commentary/final 按完整消息落地。"),
   blockStreamingBreak: z.preprocess((value) => normalizeLooseString(value)?.toLowerCase(), z.enum(["text_end", "message_end"]).optional().default("message_end")).describe("分块发送的边界。默认 message_end：等单条 assistant message 完整生成后再发，更适合 QQ 群聊。"),
   maxReplyLayers: NumberInputSchema(5).describe("reply 最大递归层数。默认 5。"),
