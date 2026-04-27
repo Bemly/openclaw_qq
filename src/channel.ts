@@ -4022,6 +4022,7 @@ ${current}
                                     Array.isArray(mergedCtx?.MediaPaths) ? mergedCtx.MediaPaths.length : 0
                                 );
                                 console.log(`[QQ] visionModel routing: ${imageCount} image(s) detected, mode=${config.visionModelMode || "always"}, chain=${visionModelList.join(" → ")} → ${rawModelConfig.primary || "primary"}`);
+                                console.log(`[QQ-vision-debug] stripSystemPrompt=${config.visionModelStripSystemPrompt} bodyHasSystemTag=${/<system>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length}`);
                                 // Force vision model to describe images before replying
                                 const visionPrompt = config.visionModelPrompt || "";
                                 if (visionPrompt) {
@@ -4029,6 +4030,7 @@ ${current}
                                         // Strip character system prompt, keep only visionPrompt
                                         mergedCtx.Body = mergedCtx.Body.replace(/<system>[\s\S]*?<\/system>\s*/g, "");
                                         mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
+                                        console.log(`[QQ-vision-debug] after strip: bodyHasSystemTag=${/<system>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} bodyPreview=${mergedCtx.Body.slice(-300).replace(/\n/g, "\\n")}`);
                                     } else {
                                         // Append visionPrompt as additional <system> block
                                         mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
@@ -4097,6 +4099,12 @@ ${current}
                                         })
                                     }
                                 };
+                                if (shouldUseVisionModel) {
+                                    const qqSysPrompt = (currentCfg as any).channels?.qq?.systemPrompt;
+                                    const agentSysPrompt = (currentCfg as any).agents?.defaults?.systemPrompt;
+                                    const matchedAgentSysPrompt = ((currentCfg as any).agents?.list || []).find((a: any) => a.id === matchedAgentId)?.systemPrompt;
+                                    console.log(`[QQ-vision-debug] currentCfg channels.qq.systemPrompt="${qqSysPrompt}" agents.defaults.systemPrompt="${agentSysPrompt}" matchedAgent.systemPrompt="${matchedAgentSysPrompt}"`);
+                                }
 
                                 for (let tryCount = 0; tryCount <= maxRetries; tryCount++) {
                                     if (runState.isStale()) {
