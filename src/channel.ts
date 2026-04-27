@@ -4069,6 +4069,15 @@ ${current}
 
                                 currentCfg = {
                                     ...(cfg as any),
+                                    ...(shouldUseVisionModel && config.visionModelStripSystemPrompt ? {
+                                        channels: {
+                                            ...((cfg as any).channels || {}),
+                                            qq: {
+                                                ...(((cfg as any).channels?.qq as Record<string, unknown> | undefined) ?? {}),
+                                                systemPrompt: "",
+                                            },
+                                        },
+                                    } : {}),
                                     agents: {
                                         ...((cfg as any).agents || {}),
                                         defaults: {
