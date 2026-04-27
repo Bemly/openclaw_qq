@@ -4132,6 +4132,26 @@ ${current}
                                             resetBufferedFinalTexts();
                                             resetBufferedUnknownTexts();
                                             const replyCfg = buildQQReplyConfig(currentCfg as OpenClawConfig, config);
+                                            if (shouldUseVisionModel) {
+                                                const spTop = (replyCfg as any).systemPrompt;
+                                                const spAgent = (replyCfg as any).agents?.defaults?.systemPrompt;
+                                                const spChan = (replyCfg as any).channels?.qq?.systemPrompt;
+                                                const matched = ((replyCfg as any).agents?.list || []).find((a: any) => a.id === matchedAgentId);
+                                                const spMatched = matched?.systemPrompt;
+                                                const bodyDump = mergedCtx.Body.length > 1200
+                                                    ? mergedCtx.Body.slice(0, 600) + "\n...\n" + mergedCtx.Body.slice(-600)
+                                                    : mergedCtx.Body;
+                                                console.log(`[QQ-vision-dispatch] === FULL CONTEXT ===`);
+                                                console.log(`[QQ-vision-dispatch] modelToTest=${modelToTest} sessionKey=${mergedCtx.SessionKey} convLabel=${mergedCtx.ConversationLabel}`);
+                                                console.log(`[QQ-vision-dispatch] cfg.systemPrompt="${spTop}"`);
+                                                console.log(`[QQ-vision-dispatch] cfg.agents.defaults.systemPrompt="${spAgent}"`);
+                                                console.log(`[QQ-vision-dispatch] cfg.channels.qq.systemPrompt="${spChan}"`);
+                                                console.log(`[QQ-vision-dispatch] cfg.agents.list[matched].systemPrompt="${spMatched}"`);
+                                                console.log(`[QQ-vision-dispatch] body (${mergedCtx.Body.length} chars):\n${bodyDump}`);
+                                                console.log(`[QQ-vision-dispatch] MediaUrls=${JSON.stringify((mergedCtx as any).MediaUrls)}`);
+                                                console.log(`[QQ-vision-dispatch] MediaPaths=${JSON.stringify((mergedCtx as any).MediaPaths)}`);
+                                                console.log(`[QQ-vision-dispatch] === END CONTEXT ===`);
+                                            }
                                             const dispatchResult = await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
                                                 ctx: mergedCtx,
                                                 cfg: replyCfg,
