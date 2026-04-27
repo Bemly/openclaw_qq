@@ -4022,15 +4022,17 @@ ${current}
                                     Array.isArray(mergedCtx?.MediaPaths) ? mergedCtx.MediaPaths.length : 0
                                 );
                                 console.log(`[QQ] visionModel routing: ${imageCount} image(s) detected, mode=${config.visionModelMode || "always"}, chain=${visionModelList.join(" → ")} → ${rawModelConfig.primary || "primary"}`);
-                                console.log(`[QQ-vision-debug] stripSystemPrompt=${config.visionModelStripSystemPrompt} bodyHasSystemTag=${/<system>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length}`);
+                                console.log(`[QQ-vision-debug] stripSystemPrompt=${config.visionModelStripSystemPrompt} bodyHasSystemTag=${/<system>/i.test(mergedCtx.Body)} bodyHasHistoryTag=${/<history>/i.test(mergedCtx.Body)} bodyHasQQContextTag=${/<qq_context>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} bodyHead=${mergedCtx.Body.slice(0, 200).replace(/\n/g, "\\n")}`);
                                 // Force vision model to describe images before replying
                                 const visionPrompt = config.visionModelPrompt || "";
                                 if (visionPrompt) {
                                     if (config.visionModelStripSystemPrompt) {
-                                        // Strip character system prompt, keep only visionPrompt
+                                        // Strip character context blocks, keep only visionPrompt
                                         mergedCtx.Body = mergedCtx.Body.replace(/<system>[\s\S]*?<\/system>\s*/g, "");
+                                        mergedCtx.Body = mergedCtx.Body.replace(/<history>[\s\S]*?<\/history>\s*/g, "");
+                                        mergedCtx.Body = mergedCtx.Body.replace(/<qq_context>[\s\S]*?<\/qq_context>\s*/g, "");
                                         mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
-                                        console.log(`[QQ-vision-debug] after strip: bodyHasSystemTag=${/<system>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} bodyPreview=${mergedCtx.Body.slice(-300).replace(/\n/g, "\\n")}`);
+                                        console.log(`[QQ-vision-debug] after strip: bodyHasSystemTag=${/<system>/i.test(mergedCtx.Body)} bodyHasHistoryTag=${/<history>/i.test(mergedCtx.Body)} bodyHasQQContextTag=${/<qq_context>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} bodyHead=${mergedCtx.Body.slice(0, 200).replace(/\n/g, "\\n")}`);
                                     } else {
                                         // Append visionPrompt as additional <system> block
                                         mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
