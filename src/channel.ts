@@ -4073,11 +4073,16 @@ ${current}
                                         ...((cfg as any).agents || {}),
                                         defaults: {
                                             ...((cfg as any).agents?.defaults || {}),
-                                            model: { primary: modelToTest, fallbacks: [] }
+                                            model: { primary: modelToTest, fallbacks: [] },
+                                            ...(shouldUseVisionModel && config.visionModelStripSystemPrompt ? { systemPrompt: "" } : {}),
                                         },
                                         list: ((cfg as any).agents?.list || []).map((a: any) => {
                                             if (a.id === matchedAgentId) {
-                                                return { ...a, model: { primary: modelToTest, fallbacks: [] } };
+                                                return {
+                                                    ...a,
+                                                    model: { primary: modelToTest, fallbacks: [] },
+                                                    ...(shouldUseVisionModel && config.visionModelStripSystemPrompt ? { systemPrompt: "" } : {}),
+                                                };
                                             }
                                             return a;
                                         })
