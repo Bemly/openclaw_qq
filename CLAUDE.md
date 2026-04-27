@@ -33,3 +33,40 @@ src/
 ## Configuration
 
 All config lives in the user's `openclaw.json` under `channels.qq`. The Zod schema in `config.ts` uses `z.preprocess` extensively to coerce web form string inputs (e.g., comma-separated ID lists, loose boolean strings like "true"/"yes"/"1") into proper types. This is the single source of truth for config shape.
+
+## Deployment (production NAS)
+
+Target: `fnOS` (飞牛 NAS, similar to Synology DSM), defined in `~/.ssh/config` as `192.168.1.162` user `bemly`. Plugin path: `/vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/`
+
+The NAS runs a `trim.openclaw` package. The OpenClaw gateway runs as `trim.openclaw` user (uid=951), while CLI commands run as `bemly` (uid=1000).
+
+**Critical ownership conflict:**
+
+Both the CLI and gateway perform a "suspicious ownership" check on the extension directory. They each require the directory owner to match their own uid (or root). Since the two processes run as different users with different uids, **no single owner satisfies both**. The only common ground is root, which `bemly` cannot set.
+
+- CLI (`bemly`, uid=1000) requires: uid=1000 or root
+- Gateway (`trim.openclaw`, uid=951) requires: uid=951 or root
+
+**Workflow:**
+
+```bash
+# 1. Push source files (requires sshpass, password in external memory)
+sshpass scp src/* fnOS:'/vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/src/'
+
+# 2. Ensure ownership is trim.openclaw so gateway can load the plugin
+sshpass ssh fnOS 'chown -R trim.openclaw:trim.openclaw /vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/'
+```
+
+**3. Restart via NAS web UI** — the CLI cannot restart the gateway due to the ownership conflict. Go to 飞牛 NAS web interface → 套件中心 (app center) → stop then start `trim.openclaw`.
+
+To verify: use the NAS web UI's OpenClaw monitor, or run:
+```bash
+sshpass ssh fnOS 'export PATH="/vol1/@appcenter/nodejs_v22/bin:/vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/node_modules/.bin:$PATH" && HOME=/vol1/@apphome/trim.openclaw/data/home openclaw channels status'
+```
+Look for `qq default: running`.
+
+**Important notes:**
+
+- Do NOT run `npx tsc` — the remote `tsconfig.json` has `strict: true` but the source has pre-existing type errors. OpenClaw loads TS at runtime.
+- Only change files under `src/`. Do not modify `index.ts`, `openclaw.plugin.json`, or `package.json` unless the remote OpenClaw SDK version advances (currently 2026.4.24).
+- Node.js is at `/vol1/@appcenter/nodejs_v22/bin` on the NAS.
