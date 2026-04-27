@@ -3992,60 +3992,7 @@ ${current}
                                 { primary: "", fallbacks: [] as string[] };
                             const fallbacks = rawModelConfig.fallbacks;
 
-                            // Vision model chain routing for image messages
-                            const visionModelList = config.visionModel
-                                ? config.visionModel.split(",").map((s: string) => s.trim()).filter(Boolean)
-                                : [];
-                            const hasInboundImages = inboundMediaUrls.length > 0
-                                || (Array.isArray(mergedCtx?.MediaUrls) && mergedCtx.MediaUrls.length > 0)
-                                || (Array.isArray(mergedCtx?.MediaPaths) && mergedCtx.MediaPaths.length > 0);
-                            const shouldUseVisionModel = (() => {
-                                if (visionModelList.length === 0) return false;
-                                if (!hasInboundImages) return false;
-                                if (config.visionModelMode === "always") return true;
-                                if (config.visionModelMode === "non_multimodal" || !config.visionModelMode) {
-                                    const primaryModel = rawModelConfig.primary.toLowerCase();
-                                    const multimodalPatterns = [
-                                        "gpt-4o", "gpt-4.1", "gpt-5", "claude", "gemini",
-                                        "glm-4v", "qwen-vl", "yi-vision", "hunyuan-vision",
-                                        "minimax", "step"
-                                    ];
-                                    const isMultimodal = multimodalPatterns.some(p => primaryModel.includes(p));
-                                    return !isMultimodal;
-                                }
-                                return false;
-                            })();
-                            if (shouldUseVisionModel) {
-                                const imageCount = Math.max(
-                                    inboundMediaUrls.length,
-                                    Array.isArray(mergedCtx?.MediaUrls) ? mergedCtx.MediaUrls.length : 0,
-                                    Array.isArray(mergedCtx?.MediaPaths) ? mergedCtx.MediaPaths.length : 0
-                                );
-                                console.log(`[QQ] visionModel routing: ${imageCount} image(s) detected, mode=${config.visionModelMode || "always"}, chain=${visionModelList.join(" → ")} → ${rawModelConfig.primary || "primary"}`);
-                                console.log(`[QQ-vision-debug] stripSystemPrompt=${config.visionModelStripSystemPrompt} bodyHasSystemTag=${/<system>/i.test(mergedCtx.Body)} bodyHasHistoryTag=${/<history>/i.test(mergedCtx.Body)} bodyHasQQContextTag=${/<qq_context>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} bodyHead=${mergedCtx.Body.slice(0, 200).replace(/\n/g, "\\n")}`);
-                                // Force vision model to describe images before replying
-                                const visionPrompt = config.visionModelPrompt || "";
-                                if (visionPrompt) {
-                                    if (config.visionModelStripSystemPrompt) {
-                                        // Strip character context blocks, keep only visionPrompt
-                                        mergedCtx.Body = mergedCtx.Body.replace(/<system>[\s\S]*?<\/system>\s*/g, "");
-                                        mergedCtx.Body = mergedCtx.Body.replace(/<history>[\s\S]*?<\/history>\s*/g, "");
-                                        mergedCtx.Body = mergedCtx.Body.replace(/<qq_context>[\s\S]*?<\/qq_context>\s*/g, "");
-                                        mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
-                                        // Isolate vision model from character conversation history
-                                        mergedCtx.SessionKey = `vision:${Math.random().toString(36).slice(2, 10)}`;
-                                        mergedCtx.ConversationLabel = `vision:${Math.random().toString(36).slice(2, 10)}`;
-                                        console.log(`[QQ-vision-debug] after strip: bodySys=${/<system>/i.test(mergedCtx.Body)} bodyHist=${/<history>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} sessionKey=${mergedCtx.SessionKey} convLabel=${mergedCtx.ConversationLabel} bodyTail=${mergedCtx.Body.slice(-200).replace(/\n/g, "\\n")}`);
-                                    } else {
-                                        // Append visionPrompt as additional <system> block
-                                        mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
-                                    }
-                                }
-                            }
-
-                            const modelsToTry = shouldUseVisionModel
-                                ? [...visionModelList]
-                                : [null, ...fallbacks];
+                            const modelsToTry = [null, ...fallbacks];
                             let globalDispatchError: any = null;
 
                             out_loop:
@@ -4074,43 +4021,22 @@ ${current}
                                     }
                                 }
 
-                                const visionSysPrompt = (shouldUseVisionModel && config.visionModelStripSystemPrompt) ? (config.visionModelPrompt || "") : undefined;
                                 currentCfg = {
                                     ...(cfg as any),
-                                    ...(visionSysPrompt !== undefined ? {
-                                        channels: {
-                                            ...((cfg as any).channels || {}),
-                                            qq: {
-                                                ...(((cfg as any).channels?.qq as Record<string, unknown> | undefined) ?? {}),
-                                                systemPrompt: visionSysPrompt,
-                                            },
-                                        },
-                                    } : {}),
                                     agents: {
                                         ...((cfg as any).agents || {}),
                                         defaults: {
                                             ...((cfg as any).agents?.defaults || {}),
-                                            model: { primary: modelToTest, fallbacks: [] },
-                                            ...(visionSysPrompt !== undefined ? { systemPrompt: visionSysPrompt } : {}),
+                                            model: { primary: modelToTest, fallbacks: [] }
                                         },
                                         list: ((cfg as any).agents?.list || []).map((a: any) => {
                                             if (a.id === matchedAgentId) {
-                                                return {
-                                                    ...a,
-                                                    model: { primary: modelToTest, fallbacks: [] },
-                                                    ...(visionSysPrompt !== undefined ? { systemPrompt: visionSysPrompt } : {}),
-                                                };
+                                                return { ...a, model: { primary: modelToTest, fallbacks: [] } };
                                             }
                                             return a;
                                         })
                                     }
                                 };
-                                if (shouldUseVisionModel) {
-                                    const qqSysPrompt = (currentCfg as any).channels?.qq?.systemPrompt;
-                                    const agentSysPrompt = (currentCfg as any).agents?.defaults?.systemPrompt;
-                                    const matchedAgentSysPrompt = ((currentCfg as any).agents?.list || []).find((a: any) => a.id === matchedAgentId)?.systemPrompt;
-                                    console.log(`[QQ-vision-debug] currentCfg channels.qq.systemPrompt="${qqSysPrompt}" agents.defaults.systemPrompt="${agentSysPrompt}" matchedAgent.systemPrompt="${matchedAgentSysPrompt}"`);
-                                }
 
                                 for (let tryCount = 0; tryCount <= maxRetries; tryCount++) {
                                     if (runState.isStale()) {
@@ -4133,29 +4059,6 @@ ${current}
                                             resetBufferedFinalTexts();
                                             resetBufferedUnknownTexts();
                                             const replyCfg = buildQQReplyConfig(currentCfg as OpenClawConfig, config);
-                                            if (shouldUseVisionModel) {
-                                                const spTop = (replyCfg as any).systemPrompt;
-                                                const spAgent = (replyCfg as any).agents?.defaults?.systemPrompt;
-                                                const spChan = (replyCfg as any).channels?.qq?.systemPrompt;
-                                                const matched = ((replyCfg as any).agents?.list || []).find((a: any) => a.id === matchedAgentId);
-                                                const spMatched = matched?.systemPrompt;
-                                                const bodyDump = mergedCtx.Body.length > 1200
-                                                    ? mergedCtx.Body.slice(0, 600) + "\n...\n" + mergedCtx.Body.slice(-600)
-                                                    : mergedCtx.Body;
-                                                console.log(`[QQ-vision-dispatch] === FULL CONTEXT ===`);
-                                                console.log(`[QQ-vision-dispatch] modelToTest=${modelToTest} sessionKey=${mergedCtx.SessionKey} convLabel=${mergedCtx.ConversationLabel}`);
-                                                console.log(`[QQ-vision-dispatch] cfg.systemPrompt="${spTop}"`);
-                                                console.log(`[QQ-vision-dispatch] cfg.agents.defaults.systemPrompt="${spAgent}"`);
-                                                console.log(`[QQ-vision-dispatch] cfg.channels.qq.systemPrompt="${spChan}"`);
-                                                console.log(`[QQ-vision-dispatch] cfg.agents.list[matched].systemPrompt="${spMatched}"`);
-                                                console.log(`[QQ-vision-dispatch] matchedAgent keys=${matched ? Object.keys(matched).join(",") : "null"}`);
-                                                console.log(`[QQ-vision-dispatch] matchedAgent full=${JSON.stringify(matched)}`);
-                                                console.log(`[QQ-vision-dispatch] defaults keys=${Object.keys((replyCfg as any).agents?.defaults || {}).join(",")}`);
-                                                console.log(`[QQ-vision-dispatch] body (${mergedCtx.Body.length} chars):\n${bodyDump}`);
-                                                console.log(`[QQ-vision-dispatch] MediaUrls=${JSON.stringify((mergedCtx as any).MediaUrls)}`);
-                                                console.log(`[QQ-vision-dispatch] MediaPaths=${JSON.stringify((mergedCtx as any).MediaPaths)}`);
-                                                console.log(`[QQ-vision-dispatch] === END CONTEXT ===`);
-                                            }
                                             const dispatchResult = await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
                                                 ctx: mergedCtx,
                                                 cfg: replyCfg,
@@ -4221,10 +4124,8 @@ ${current}
                                                 if (modelIndex === modelsToTry.length - 1 && !runState.isStale()) {
                                                     if (globalDispatchError) {
                                                         const errMessage = (globalDispatchError instanceof Error) ? globalDispatchError.message : String(globalDispatchError);
-                                                        const notifyMsg = shouldUseVisionModel
-                                                            ? `⚠️ 所有视觉模型均调用失败 (chain=${visionModelList.join(",")}): ${errMessage || "未知错误"}`
-                                                            : (errMessage.trim() ? `⚠️ 服务调用失败: ${errMessage}` : "⚠️ 服务调用失败，无具体错误信息，请稍后重试。");
-                                                    if (config.enableErrorNotify || shouldUseVisionModel) deliver({ text: notifyMsg });
+                                                        const notifyMsg = errMessage.trim() ? `⚠️ 服务调用失败: ${errMessage}` : "⚠️ 服务调用失败，无具体错误信息，请稍后重试。";
+                                                    if (config.enableErrorNotify) deliver({ text: notifyMsg });
                                                 } else {
                                                     const fallbackText = (config.emptyReplyFallbackText || "⚠️ 本轮模型返回空内容。请重试，或先执行 /newsession 后再试。").trim();
                                                     if (fallbackText) {
