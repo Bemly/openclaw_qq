@@ -4074,14 +4074,15 @@ ${current}
                                     }
                                 }
 
+                                const visionSysPrompt = (shouldUseVisionModel && config.visionModelStripSystemPrompt) ? (config.visionModelPrompt || "") : undefined;
                                 currentCfg = {
                                     ...(cfg as any),
-                                    ...(shouldUseVisionModel && config.visionModelStripSystemPrompt ? {
+                                    ...(visionSysPrompt !== undefined ? {
                                         channels: {
                                             ...((cfg as any).channels || {}),
                                             qq: {
                                                 ...(((cfg as any).channels?.qq as Record<string, unknown> | undefined) ?? {}),
-                                                systemPrompt: "",
+                                                systemPrompt: visionSysPrompt,
                                             },
                                         },
                                     } : {}),
@@ -4090,14 +4091,14 @@ ${current}
                                         defaults: {
                                             ...((cfg as any).agents?.defaults || {}),
                                             model: { primary: modelToTest, fallbacks: [] },
-                                            ...(shouldUseVisionModel && config.visionModelStripSystemPrompt ? { systemPrompt: "" } : {}),
+                                            ...(visionSysPrompt !== undefined ? { systemPrompt: visionSysPrompt } : {}),
                                         },
                                         list: ((cfg as any).agents?.list || []).map((a: any) => {
                                             if (a.id === matchedAgentId) {
                                                 return {
                                                     ...a,
                                                     model: { primary: modelToTest, fallbacks: [] },
-                                                    ...(shouldUseVisionModel && config.visionModelStripSystemPrompt ? { systemPrompt: "" } : {}),
+                                                    ...(visionSysPrompt !== undefined ? { systemPrompt: visionSysPrompt } : {}),
                                                 };
                                             }
                                             return a;
