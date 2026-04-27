@@ -4033,8 +4033,8 @@ ${current}
                                         mergedCtx.Body = mergedCtx.Body.replace(/<qq_context>[\s\S]*?<\/qq_context>\s*/g, "");
                                         mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
                                         // Isolate vision model from character conversation history
-                                        mergedCtx.SessionKey = (mergedCtx.SessionKey || "") + "::vision";
-                                        mergedCtx.ConversationLabel = (mergedCtx.ConversationLabel || "") + "::vision";
+                                        mergedCtx.SessionKey = `vision:${Math.random().toString(36).slice(2, 10)}`;
+                                        mergedCtx.ConversationLabel = `vision:${Math.random().toString(36).slice(2, 10)}`;
                                         console.log(`[QQ-vision-debug] after strip: bodySys=${/<system>/i.test(mergedCtx.Body)} bodyHist=${/<history>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} sessionKey=${mergedCtx.SessionKey} convLabel=${mergedCtx.ConversationLabel} bodyTail=${mergedCtx.Body.slice(-200).replace(/\n/g, "\\n")}`);
                                     } else {
                                         // Append visionPrompt as additional <system> block
@@ -4147,6 +4147,9 @@ ${current}
                                                 console.log(`[QQ-vision-dispatch] cfg.agents.defaults.systemPrompt="${spAgent}"`);
                                                 console.log(`[QQ-vision-dispatch] cfg.channels.qq.systemPrompt="${spChan}"`);
                                                 console.log(`[QQ-vision-dispatch] cfg.agents.list[matched].systemPrompt="${spMatched}"`);
+                                                console.log(`[QQ-vision-dispatch] matchedAgent keys=${matched ? Object.keys(matched).join(",") : "null"}`);
+                                                console.log(`[QQ-vision-dispatch] matchedAgent full=${JSON.stringify(matched)}`);
+                                                console.log(`[QQ-vision-dispatch] defaults keys=${Object.keys((replyCfg as any).agents?.defaults || {}).join(",")}`);
                                                 console.log(`[QQ-vision-dispatch] body (${mergedCtx.Body.length} chars):\n${bodyDump}`);
                                                 console.log(`[QQ-vision-dispatch] MediaUrls=${JSON.stringify((mergedCtx as any).MediaUrls)}`);
                                                 console.log(`[QQ-vision-dispatch] MediaPaths=${JSON.stringify((mergedCtx as any).MediaPaths)}`);
