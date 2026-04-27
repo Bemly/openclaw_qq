@@ -4044,7 +4044,7 @@ ${current}
                             }
 
                             const modelsToTry = shouldUseVisionModel
-                                ? [...visionModelList, null, ...fallbacks]
+                                ? [...visionModelList]
                                 : [null, ...fallbacks];
                             let globalDispatchError: any = null;
 
@@ -4221,8 +4221,10 @@ ${current}
                                                 if (modelIndex === modelsToTry.length - 1 && !runState.isStale()) {
                                                     if (globalDispatchError) {
                                                         const errMessage = (globalDispatchError instanceof Error) ? globalDispatchError.message : String(globalDispatchError);
-                                                        const notifyMsg = errMessage.trim() ? `⚠️ 服务调用失败: ${errMessage}` : "⚠️ 服务调用失败，无具体错误信息，请稍后重试。";
-                                                    if (config.enableErrorNotify) deliver({ text: notifyMsg });
+                                                        const notifyMsg = shouldUseVisionModel
+                                                            ? `⚠️ 所有视觉模型均调用失败 (chain=${visionModelList.join(",")}): ${errMessage || "未知错误"}`
+                                                            : (errMessage.trim() ? `⚠️ 服务调用失败: ${errMessage}` : "⚠️ 服务调用失败，无具体错误信息，请稍后重试。");
+                                                    if (config.enableErrorNotify || shouldUseVisionModel) deliver({ text: notifyMsg });
                                                 } else {
                                                     const fallbackText = (config.emptyReplyFallbackText || "⚠️ 本轮模型返回空内容。请重试，或先执行 /newsession 后再试。").trim();
                                                     if (fallbackText) {
