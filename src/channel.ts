@@ -4032,7 +4032,10 @@ ${current}
                                         mergedCtx.Body = mergedCtx.Body.replace(/<history>[\s\S]*?<\/history>\s*/g, "");
                                         mergedCtx.Body = mergedCtx.Body.replace(/<qq_context>[\s\S]*?<\/qq_context>\s*/g, "");
                                         mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
-                                        console.log(`[QQ-vision-debug] after strip: bodyHasSystemTag=${/<system>/i.test(mergedCtx.Body)} bodyHasHistoryTag=${/<history>/i.test(mergedCtx.Body)} bodyHasQQContextTag=${/<qq_context>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} bodyHead=${mergedCtx.Body.slice(0, 200).replace(/\n/g, "\\n")}`);
+                                        // Isolate vision model from character conversation history
+                                        mergedCtx.SessionKey = (mergedCtx.SessionKey || "") + "::vision";
+                                        mergedCtx.ConversationLabel = (mergedCtx.ConversationLabel || "") + "::vision";
+                                        console.log(`[QQ-vision-debug] after strip: bodySys=${/<system>/i.test(mergedCtx.Body)} bodyHist=${/<history>/i.test(mergedCtx.Body)} bodyLen=${mergedCtx.Body.length} sessionKey=${mergedCtx.SessionKey} convLabel=${mergedCtx.ConversationLabel} bodyTail=${mergedCtx.Body.slice(-200).replace(/\n/g, "\\n")}`);
                                     } else {
                                         // Append visionPrompt as additional <system> block
                                         mergedCtx.Body = mergedCtx.Body + `\n\n<system>${visionPrompt}</system>`;
