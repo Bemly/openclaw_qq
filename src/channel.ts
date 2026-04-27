@@ -4022,6 +4022,11 @@ ${current}
                                     Array.isArray(mergedCtx?.MediaPaths) ? mergedCtx.MediaPaths.length : 0
                                 );
                                 console.log(`[QQ] visionModel routing: ${imageCount} image(s) detected, mode=${config.visionModelMode || "always"}, chain=${visionModelList.join(" → ")} → ${rawModelConfig.primary || "primary"}`);
+                                // Force vision model to describe images before replying
+                                const visionPrompt = config.visionModelPrompt || "";
+                                if (visionPrompt) {
+                                    mergedCtx.Body = `<system_reminder>${visionPrompt}</system_reminder>\n\n` + mergedCtx.Body;
+                                }
                             }
 
                             const modelsToTry = shouldUseVisionModel
