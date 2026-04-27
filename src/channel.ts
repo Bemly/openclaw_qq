@@ -3873,6 +3873,34 @@ ${current}
                         ? await cacheImageHintsLocally(inboundMediaUrls, imageHintMeta)
                         : { entries: inboundMediaUrls.map((url) => ({ url, type: imageHintMeta.get(url)?.mimeType ?? inferImageMimeType(url) ?? DEFAULT_QQ_IMAGE_MIME })), failures: [] as Array<{ url: string; error: string }> };
                     const inboundMediaPayload = buildInboundMediaPayloadFromEntries(cachedInboundImages.entries);
+
+                    // ── 独立识图模块 ──────────────────────────
+                    const visionModelRaw = config.visionModel || "";
+                    if (visionModelRaw && cachedInboundImages.entries.some(e => e.path)) {
+                        const cachedPaths = cachedInboundImages.entries
+                            .filter(e => e.path)
+                            .map(e => e.path as string);
+                        const providers = (cfg as any)?.models?.providers || {};
+                        const { describeImages } = await import("./vision.js");
+                        const result = await describeImages({
+                            imagePaths: cachedPaths,
+                            visionModelRaw,
+                            visionPrompt: config.visionModelPrompt || "请详细描述图片内容",
+                            providers,
+                        });
+                        if (result.description) {
+                            const descBlock = `[图片描述 (${result.model})]\n${result.description}\n[/图片描述]`;
+                            bodyWithReply = descBlock + "\n\n" + bodyWithReply;
+                            // Strip MediaPaths so main model doesn't try to read images
+                            delete (inboundMediaPayload as any).MediaPath;
+                            delete (inboundMediaPayload as any).MediaPaths;
+                            console.log(`[QQ-vision] injected ${result.description.length} chars of image description into body`);
+                        } else {
+                            console.log(`[QQ-vision] no description: ${result.error || "unknown"}`);
+                        }
+                    }
+                    // ── END 独立识图模块 ──────────────────────
+
                     if (config.debugLayerTrace) {
                         const mediaPathCount = Array.isArray((inboundMediaPayload as any).MediaPaths)
                             ? (inboundMediaPayload as any).MediaPaths.length
