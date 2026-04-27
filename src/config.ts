@@ -120,6 +120,7 @@ export const QQConfigSchema = z.object({
   forwardLongReplyThreshold: NumberInputSchema(300).describe("final_answer 长回复自动转为 QQ 合并转发的阈值（字符数）。默认 300；commentary 仍按普通消息发送。"),
   forwardNodeCharLimit: NumberInputSchema(0).describe("启用长回复合并转发时，每个转发节点的最大字符数。默认 0，表示不按长度拆节点；同一轮回复的多条 assistant message 会尽量合并进一个转发。"),
   forwardNodeName: z.preprocess((value) => normalizeLooseString(value), z.string().optional().default("OpenClaw")).describe("启用长回复合并转发时，节点显示昵称。默认 OpenClaw。"),
+  atSenderInGroupReply: BooleanInputSchema(false).describe("群聊回复时是否在第一条消息前艾特发送者。默认关闭。"),
 }).passthrough();
 
 export type QQConfig = z.infer<typeof QQConfigSchema>;
