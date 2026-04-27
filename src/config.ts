@@ -102,7 +102,7 @@ export const QQConfigSchema = z.object({
   sharedMediaContainerDir: z.preprocess((value) => normalizeLooseString(value), z.string().optional().default("/openclaw_media")).describe("可选：共享目录在 NapCat 容器内的挂载路径。默认 /openclaw_media。"),
   enableGuilds: BooleanInputSchema(true).describe("是否启用 QQ 频道（Guild）支持。"),
   enrichReplyForwardContext: BooleanInputSchema(true).describe("是否递归解析 reply/forward 并注入多层上下文。默认开启。"),
-  cacheInboundImagesToLocal: BooleanInputSchema(true).describe("是否将当前消息以及引用/转发上下文里识别到的图片缓存到本地 MediaPaths。默认开启，便于 ACP 与多模态 agent 实际读图；关闭后仅保留 URL 提示，部分 agent 可能只能看到文字。"),
+  cacheInboundImagesToLocal: BooleanInputSchema(true).describe("是否将当前消息以及引用/转发上下文里识别到的图片缓存到本地 MediaPaths。默认开启，便于 ACP 与多模态 agent 实际读图。关闭后遇到图片消息直接跳过不回复。"),
   blockStreaming: BooleanInputSchema(true).describe("是否按 assistant message 分块发送回复。默认开启，推荐配合 message_end，让 commentary/final 按完整消息落地。"),
   blockStreamingBreak: z.preprocess((value) => normalizeLooseString(value)?.toLowerCase(), z.enum(["text_end", "message_end"]).optional().default("message_end")).describe("分块发送的边界。默认 message_end：等单条 assistant message 完整生成后再发，更适合 QQ 群聊。"),
   maxReplyLayers: NumberInputSchema(5).describe("reply 最大递归层数。默认 5。"),

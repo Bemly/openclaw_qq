@@ -3857,6 +3857,7 @@ ${current}
                         ...imageHints,
                         ...layeredContext.imageUrls,
                     ])).slice(0, 5);
+                    if (config.cacheInboundImagesToLocal === false && inboundMediaUrls.length > 0) return;
                     const cachedInboundImages = config.cacheInboundImagesToLocal !== false
                         ? await cacheImageHintsLocally(inboundMediaUrls, imageHintMeta)
                         : { entries: inboundMediaUrls.map((url) => ({ url, type: imageHintMeta.get(url)?.mimeType ?? inferImageMimeType(url) ?? DEFAULT_QQ_IMAGE_MIME })), failures: [] as Array<{ url: string; error: string }> };
