@@ -121,6 +121,7 @@ export const QQConfigSchema = z.object({
   forwardNodeCharLimit: NumberInputSchema(0).describe("启用长回复合并转发时，每个转发节点的最大字符数。默认 0，表示不按长度拆节点；同一轮回复的多条 assistant message 会尽量合并进一个转发。"),
   forwardNodeName: z.preprocess((value) => normalizeLooseString(value), z.string().optional().default("OpenClaw")).describe("启用长回复合并转发时，节点显示昵称。默认 OpenClaw。"),
   atSenderInGroupReply: BooleanInputSchema(false).describe("群聊回复时是否在第一条消息前艾特发送者。默认关闭。"),
+  proactiveReplyProbability: NumberInputSchema(0).describe("主动回复概率（0~1），默认 0=关闭。设为 0.05 即 5% 概率随机回复未触发的群消息。不受 keywordOnlyTrigger 控制，与关键词100%回复共存。"),
 }).passthrough();
 
 export type QQConfig = z.infer<typeof QQConfigSchema>;

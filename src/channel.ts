@@ -3429,6 +3429,9 @@ ${current}
                     let mentionedByReply = false;
 
                     const checkMention = isGroup || isGuild;
+                    if (!isTriggered && checkMention && config.proactiveReplyProbability > 0 && Math.random() < config.proactiveReplyProbability) {
+                        isTriggered = true;
+                    }
                     if (keywordOnlyTrigger && !isTriggered) return;
                     if (checkMention && config.requireMention && !keywordOnlyTrigger && !isTriggered) {
                         const selfId = client.getSelfId();
