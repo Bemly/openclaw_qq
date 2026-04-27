@@ -1030,8 +1030,19 @@ async function buildModelCatalogText(enableDynamicLookup: boolean): Promise<stri
     }
 
     const providers = parsed?.models?.providers as Record<string, any> | undefined;
+    const currentModelFromModel = (typeof parsed?.agents?.defaults?.model === "string" && parsed.agents.defaults.model.trim())
+        || (typeof parsed?.agents?.defaults?.model?.primary === "string" && parsed.agents.defaults.model.primary.trim());
+    const currentModelFromModels = (() => {
+        const modelsMap = parsed?.agents?.defaults?.models;
+        if (modelsMap && typeof modelsMap === "object") {
+            const keys = Object.keys(modelsMap).filter(k => k.includes("/"));
+            if (keys.length > 0) return keys[0];
+        }
+        return null;
+    })();
     const currentModel =
-        (typeof parsed?.agents?.defaults?.model?.primary === "string" && parsed.agents.defaults.model.primary.trim())
+        currentModelFromModel
+        || currentModelFromModels
         || (typeof parsed?.agent?.model === "string" && parsed.agent.model.trim())
         || "unknown";
     if (!providers || typeof providers !== "object") {
@@ -3946,14 +3957,22 @@ ${current}
                         try {
                             const matchedAgentId = route.agentId;
                             const matchedAgentConfig = ((cfg as any).agents?.list || []).find((a: any) => a.id === matchedAgentId);
-                            // OpenClaw accepts either "provider/model" or
-                            // { primary, fallbacks } for agent model config.
+                            // OpenClaw accepts either "provider/model", or
+                            // { primary, fallbacks }, or the newer { "provider/model": {} } map.
                             const normalizeModelConfig = (value: any) => {
                                 if (typeof value === "string") {
                                     const primary = value.trim();
                                     return primary ? { primary, fallbacks: [] as string[] } : undefined;
                                 }
                                 if (!value || typeof value !== "object") {
+                                    return undefined;
+                                }
+                                // Handle { "provider/model": {...}, ... } maps format
+                                if (!("primary" in value) && !("fallbacks" in value)) {
+                                    const modelKeys = Object.keys(value).filter(k => k.includes("/"));
+                                    if (modelKeys.length > 0) {
+                                        return { primary: modelKeys[0], fallbacks: modelKeys.slice(1) };
+                                    }
                                     return undefined;
                                 }
                                 const primary = typeof value.primary === "string" ? value.primary.trim() : "";
@@ -3968,8 +3987,8 @@ ${current}
                                 return { primary, fallbacks };
                             };
                             const rawModelConfig =
-                                normalizeModelConfig(matchedAgentConfig?.model) ||
-                                normalizeModelConfig((cfg as any).agents?.defaults?.model) ||
+                                normalizeModelConfig(matchedAgentConfig?.model || matchedAgentConfig?.models) ||
+                                normalizeModelConfig((cfg as any).agents?.defaults?.model || (cfg as any).agents?.defaults?.models) ||
                                 { primary: "", fallbacks: [] as string[] };
                             const fallbacks = rawModelConfig.fallbacks;
 
@@ -3987,7 +4006,7 @@ ${current}
                                 }
 
                                 if (!modelToTest) {
-                                    globalDispatchError = new Error("[QQ] No model resolved for this route; check agents.<id>.model or agents.defaults.model");
+                                    globalDispatchError = new Error("[QQ] No model resolved for this route; check agents.<id>.model, agents.defaults.model, or agents.defaults.models");
                                     console.error(globalDispatchError);
                                     break out_loop;
                                 }
