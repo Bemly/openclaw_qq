@@ -4401,43 +4401,7 @@ ${current}
                         : { entries: inboundMediaUrls.map((url) => ({ url, type: imageHintMeta.get(url)?.mimeType ?? inferImageMimeType(url) ?? DEFAULT_QQ_IMAGE_MIME })), failures: [] as Array<{ url: string; error: string }> };
                     const inboundMediaPayload = buildInboundMediaPayloadFromEntries(cachedInboundImages.entries);
 
-                    // ── 独立识图模块 ──────────────────────────
-                    const visionModelRaw = config.visionModel || "";
-                    // 尊重 proactiveReplyProbability：非触发的群/频道消息不在概率内就跳过识图
-                    const skipVisionByProactive = (isGroup || isGuild) && !isTriggered && config.proactiveReplyProbability > 0;
-                    if (visionModelRaw && cachedInboundImages.entries.some(e => e.path) && !skipVisionByProactive) {
-                        const cachedPaths = cachedInboundImages.entries
-                            .filter(e => e.path)
-                            .map(e => e.path as string);
-                        const providers = (cfg as any)?.models?.providers || {};
-                        const { describeImages } = await import("./vision.js");
-                        const result = await describeImages({
-                            imagePaths: cachedPaths,
-                            visionModelRaw,
-                            visionPrompt: config.visionModelPrompt || "请详细描述图片内容",
-                            visionRateLimitMs: config.visionRateLimitMs ?? 0,
-                            providers,
-                        });
-                        if (result.description) {
-                            console.log(`[QQ-vision] delivering ${result.description.length} chars directly, skipping main model`);
-                            // 尊重 rateLimitMs 延迟
-                            const rateLimit = config.rateLimitMs ?? 1000;
-                            if (rateLimit > 0) await sleep(rateLimit);
-                            // 直接发送识图描述，不走主模型
-                            const chunks = splitMessage(result.description, config.maxMessageLength ?? 4000);
-                            for (let ci = 0; ci < chunks.length; ci++) {
-                                if (ci > 0 && rateLimit > 0) await sleep(rateLimit);
-                                if (isGroup) client.sendGroupMsg(groupId, chunks[ci]);
-                                else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunks[ci]);
-                                else client.sendPrivateMsg(userId, chunks[ci]);
-                            }
-                            return; // 跳过主模型 dispatch，直接结束消息处理
-                        }
-                        console.log(`[QQ-vision] no description: ${result.error || "unknown"}, falling through to main model`);
-                    }
-                    // ── END 独立识图模块 ──────────────────────
-
-                    // ── 生图功能 ─────────────────────────────
+                    // ── 生图功能（优先于识图模块） ─────────────────────────────
                     const imageGenMatch = config.enableImageGen !== false &&
                         config.imageGenModel?.trim() &&
                         detectImageGenRequest(text.trim(), config.imageGenKeywords || "生图:,画:,绘图:");
@@ -4486,6 +4450,42 @@ ${current}
                         }
                     }
                     // ── END 生图功能 ─────────────────────────
+
+                    // ── 独立识图模块 ──────────────────────────
+                    const visionModelRaw = config.visionModel || "";
+                    // 尊重 proactiveReplyProbability：非触发的群/频道消息不在概率内就跳过识图
+                    const skipVisionByProactive = (isGroup || isGuild) && !isTriggered && config.proactiveReplyProbability > 0;
+                    if (visionModelRaw && cachedInboundImages.entries.some(e => e.path) && !skipVisionByProactive) {
+                        const cachedPaths = cachedInboundImages.entries
+                            .filter(e => e.path)
+                            .map(e => e.path as string);
+                        const providers = (cfg as any)?.models?.providers || {};
+                        const { describeImages } = await import("./vision.js");
+                        const result = await describeImages({
+                            imagePaths: cachedPaths,
+                            visionModelRaw,
+                            visionPrompt: config.visionModelPrompt || "请详细描述图片内容",
+                            visionRateLimitMs: config.visionRateLimitMs ?? 0,
+                            providers,
+                        });
+                        if (result.description) {
+                            console.log(`[QQ-vision] delivering ${result.description.length} chars directly, skipping main model`);
+                            // 尊重 rateLimitMs 延迟
+                            const rateLimit = config.rateLimitMs ?? 1000;
+                            if (rateLimit > 0) await sleep(rateLimit);
+                            // 直接发送识图描述，不走主模型
+                            const chunks = splitMessage(result.description, config.maxMessageLength ?? 4000);
+                            for (let ci = 0; ci < chunks.length; ci++) {
+                                if (ci > 0 && rateLimit > 0) await sleep(rateLimit);
+                                if (isGroup) client.sendGroupMsg(groupId, chunks[ci]);
+                                else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunks[ci]);
+                                else client.sendPrivateMsg(userId, chunks[ci]);
+                            }
+                            return; // 跳过主模型 dispatch，直接结束消息处理
+                        }
+                        console.log(`[QQ-vision] no description: ${result.error || "unknown"}, falling through to main model`);
+                    }
+                    // ── END 独立识图模块 ──────────────────────
 
                     if (config.debugLayerTrace) {
                         const mediaPathCount = Array.isArray((inboundMediaPayload as any).MediaPaths)
