@@ -3385,7 +3385,7 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
 
                             if (now - lastAnnounced >= cooldownMs) {
                                 politicalModerationCooldown.set(groupKey, now);
-                                client.sendGroupMsg(groupId, politicalResult.reason);
+                                client.sendGroupMsg(groupId, `触发撤回：原因是${politicalResult.reason}`);
                                 console.log(`[QQ-political] sent reason to group=${groupId}`);
                             } else {
                                 if (debugPoliticalModeration) {
