@@ -1069,8 +1069,11 @@ async function callImageGenerationAPI(
     }
 
     if (providerType === "bailian") {
-        // 百炼/DashScope 异步生图 API：提交任务 → 轮询结果
-        headers["X-DashScope-Async"] = "enable";
+        // 百炼/DashScope 生图 API：支持异步和同步两种模式
+        const isAsync = config.imageGenAsyncMode !== false; // 默认 true=异步
+        if (isAsync) {
+            headers["X-DashScope-Async"] = "enable";
+        }
 
         const response = await fetch(apiUrl, {
             method: "POST",
@@ -1083,38 +1086,46 @@ async function callImageGenerationAPI(
             throw new Error(`生图 API 失败 (${response.status}): ${errorText}`);
         }
 
-        const taskData = await response.json() as any;
-        const taskId = taskData?.output?.task_id;
-        if (!taskId) {
-            throw new Error(`生图任务创建失败，未返回 task_id: ${JSON.stringify(taskData)}`);
-        }
-        console.log(`[QQ-imagegen] bailian task_id=${taskId}`);
+        const data = await response.json() as any;
 
-        // 轮询任务状态
-        const maxAttempts = 30;
-        const pollInterval = 2000;
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            await new Promise(resolve => setTimeout(resolve, pollInterval));
-            const pollBase = new URL(apiUrl).origin;
-            const pollResp = await fetch(`${pollBase}/api/v1/tasks/${taskId}`, {
-                headers: { "Authorization": `Bearer ${requestApiKey}` },
-            });
-            const pollData = await pollResp.json() as any;
-            const taskStatus = pollData?.output?.task_status;
-            console.log(`[QQ-imagegen] poll attempt=${attempt + 1} status=${taskStatus}`);
+        if (isAsync) {
+            // 异步模式：提交任务 → 轮询结果
+            const taskId = data?.output?.task_id;
+            if (!taskId) {
+                throw new Error(`生图任务创建失败，未返回 task_id: ${JSON.stringify(data)}`);
+            }
+            console.log(`[QQ-imagegen] bailian async task_id=${taskId}`);
 
-            if (taskStatus === "SUCCEEDED") {
-                const url = pollData?.output?.choices?.[0]?.message?.content?.[0]?.image
-                    || pollData?.output?.results?.[0]?.url;
-                if (!url) throw new Error(`生图任务完成但无图片 URL: ${JSON.stringify(pollData)}`);
-                return { imageUrl: url };
+            // 轮询任务状态
+            const maxAttempts = 30;
+            const pollInterval = 2000;
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
+                const pollBase = new URL(apiUrl).origin;
+                const pollResp = await fetch(`${pollBase}/api/v1/tasks/${taskId}`, {
+                    headers: { "Authorization": `Bearer ${requestApiKey}` },
+                });
+                const pollData = await pollResp.json() as any;
+                const taskStatus = pollData?.output?.task_status;
+                console.log(`[QQ-imagegen] poll attempt=${attempt + 1} status=${taskStatus}`);
+
+                if (taskStatus === "SUCCEEDED") {
+                    const url = pollData?.output?.choices?.[0]?.message?.content?.[0]?.image
+                        || pollData?.output?.results?.[0]?.url;
+                    if (!url) throw new Error(`生图任务完成但无图片 URL: ${JSON.stringify(pollData)}`);
+                    return { imageUrl: url };
+                }
+                if (taskStatus === "FAILED") {
+                    throw new Error(`生图任务失败: ${JSON.stringify(pollData)}`);
+                }
+                // PENDING / RUNNING → 继续轮询
             }
-            if (taskStatus === "FAILED") {
-                throw new Error(`生图任务失败: ${JSON.stringify(pollData)}`);
-            }
-            // PENDING / RUNNING → 继续轮询
+            throw new Error(`生图任务超时（${maxAttempts * pollInterval / 1000}s）: task_id=${taskId}`);
+        } else {
+            // 同步模式：直接解析响应（如 Token Plan）
+            console.log(`[QQ-imagegen] bailian sync mode`);
+            return parseImageGenResponse(data, providerType);
         }
-        throw new Error(`生图任务超时（${maxAttempts * pollInterval / 1000}s）: task_id=${taskId}`);
     }
 
     // 非百炼（openai / custom）同步 API
@@ -1197,8 +1208,13 @@ function parseImageGenResponse(
             return { imageUrl: data.data[0].url };
         }
     } else if (providerType === "bailian") {
-        if (data.output?.results?.[0]?.url) {
-            return { imageUrl: data.output.results[0].url };
+        // 支持两种 bailian 格式：
+        // 1. 异步轮询返回：output.results[0].url 或 output.choices[0].message.content[0].image
+        // 2. 同步返回（Token Plan）：output.choices[0].message.content[0].image
+        const url = data.output?.choices?.[0]?.message?.content?.[0]?.image
+            || data.output?.results?.[0]?.url;
+        if (url) {
+            return { imageUrl: url };
         }
     }
 

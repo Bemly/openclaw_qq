@@ -134,6 +134,7 @@ export const QQConfigSchema = z.object({
   imageGenSize: z.preprocess((value) => normalizeLooseString(value), z.string().optional().default("1024x1024")).describe("图片尺寸，如 1024x1024。支持格式取决于具体模型。默认 1024x1024。"),
   imageGenStyle: z.preprocess((value) => normalizeLooseString(value)?.toLowerCase(), z.enum(["vivid", "natural"]).optional().default("vivid")).describe("图片风格：vivid（生动）或 natural（自然，仅 DALL-E 3）。默认 vivid。"),
   imageGenRateLimitMs: NumberInputSchema(0).describe("生图请求间隔（毫秒）。默认 0=无限制。设为 5000 即两次生图至少间隔 5 秒。"),
+  imageGenAsyncMode: BooleanInputSchema(true).describe("生图 API 模式：true=异步（如通义万相，需轮询task_id）；false=同步（如 Token Plan，直接返回结果）。默认 true。"),
   politicalModeration: BooleanInputSchema(false).describe("政治言论审核开关。开启后每条群消息先经过独立模型检测政治言论，命中时自动撤回消息并可选说明原因。"),
   politicalModerationCooldownMs: NumberInputSchema(60000).describe("政治言论审核原因消息冷却时间（毫秒）。同一群在此窗口内只发一次原因，其余仅撤回。默认 60000（1 分钟）。"),
   politicalModerationModel: IdListStringSchema.describe("政治言论审核模型 (provider/model)，如 bailian/qwen-turbo。留空则使用主模型。"),
