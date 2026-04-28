@@ -3889,15 +3889,18 @@ ${current}
                             providers,
                         });
                         if (result.description) {
-                            const descBlock = `[图片描述 (${result.model})]\n${result.description}\n[/图片描述]`;
-                            bodyWithReply = descBlock + "\n\n" + bodyWithReply;
-                            // Strip MediaPaths so main model doesn't try to read images
-                            delete (inboundMediaPayload as any).MediaPath;
-                            delete (inboundMediaPayload as any).MediaPaths;
-                            console.log(`[QQ-vision] injected ${result.description.length} chars of image description into body`);
-                        } else {
-                            console.log(`[QQ-vision] no description: ${result.error || "unknown"}`);
+                            console.log(`[QQ-vision] delivering ${result.description.length} chars directly, skipping main model`);
+                            // 直接发送识图描述，不走主模型
+                            const chunks = splitMessage(result.description, config.maxMessageLength ?? 4000);
+                            for (let ci = 0; ci < chunks.length; ci++) {
+                                if (ci > 0) await sleep(config.rateLimitMs ?? 1000);
+                                if (isGroup) client.sendGroupMsg(groupId, chunks[ci]);
+                                else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunks[ci]);
+                                else client.sendPrivateMsg(userId, chunks[ci]);
+                            }
+                            return; // 跳过主模型 dispatch，直接结束消息处理
                         }
+                        console.log(`[QQ-vision] no description: ${result.error || "unknown"}, falling through to main model`);
                     }
                     // ── END 独立识图模块 ──────────────────────
 
