@@ -4174,11 +4174,6 @@ ${current}
                     if (imageGenMatch) {
                         try {
                             console.log(`[QQ-imagegen] triggered by user=${userId} prompt="${imageGenMatch.prompt}"`);
-                            if (isGroup) {
-                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] 正在生成图片: ${imageGenMatch.prompt}...`);
-                            } else {
-                                client.sendPrivateMsg(userId, `正在生成图片: ${imageGenMatch.prompt}...`);
-                            }
                             const providers = (cfg as any)?.models?.providers || {};
                             const result = await callImageGenerationAPI({
                                 prompt: imageGenMatch.prompt,
