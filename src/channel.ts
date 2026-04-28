@@ -2807,7 +2807,10 @@ async function checkPoliticalSpeech(
     }
 
     const systemPrompt =
-        "你是一个内容审核助手。请判断用户输入是否包含政治相关言论（包括政治敏感话题、政治人物讨论、政策评论、政治事件等）。如果包含政治言论，请回复\"是\"，如需说明原因请回复\"是，原因：XXX\"（XXX 简述原因，不超过 20 字）。如果不包含政治言论，请只回复\"不是\"。";
+        "请判断以下用户输入是否包含政治相关言论（包括政治敏感话题、政治人物讨论、政策评论、政治事件等）。\n" +
+        "如果包含政治言论，请直接回复：是，原因：[用一句话简述原因，不超过20字]\n" +
+        "如果不包含政治言论，请只回复：不是\n" +
+        "不要输出任何其他内容。";
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -2842,9 +2845,13 @@ async function checkPoliticalSpeech(
         const content = data?.choices?.[0]?.message?.content?.trim() || "";
 
         const isPolitical = content.startsWith("是") && !content.startsWith("不是");
-        const reason = isPolitical
-            ? content.replace(/^(是[，,：:\s]*)/, "").trim() || "检测到政治言论"
+        let reason = isPolitical
+            ? content.replace(/^(是[，,：:\s]*)/, "").trim()
             : "";
+        // Sanitize meaningless reasons like "原因" or empty
+        if (reason.length <= 2 || reason === "原因" || reason === "无原因") {
+            reason = "检测到政治言论";
+        }
 
         return { isPolitical, reason };
     } catch (err) {
