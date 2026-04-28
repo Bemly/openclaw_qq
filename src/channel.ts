@@ -4184,17 +4184,15 @@ ${current}
                                 endpoint: config.imageGenEndpoint,
                                 apiKey: config.imageGenApiKey,
                             }, config, providers);
-                            const to = isGroup
-                                ? `group:${groupId}`
-                                : isGuild
-                                    ? `guild:${guildId}:${channelId}`
-                                    : `user:${userId}`;
-                            await runtime.channel.message.sendMedia({
-                                to,
-                                text: `🎨 生图完成 - ${imageGenMatch.prompt}`,
-                                mediaUrl: result.imageUrl,
-                                accountId: account.accountId,
-                            });
+                            const caption = `🎨 生图完成 - ${imageGenMatch.prompt}`;
+                            const imageMsg = `[CQ:image,file=${result.imageUrl}]`;
+                            if (isGroup) {
+                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] ${caption}\n${imageMsg}`);
+                            } else if (isGuild) {
+                                client.sendGuildChannelMsg(guildId, channelId, `${caption}\n${imageMsg}`);
+                            } else {
+                                client.sendPrivateMsg(userId, `${caption}\n${imageMsg}`);
+                            }
                             console.log(`[QQ-imagegen] success url=${result.imageUrl}`);
                             return;
                         } catch (err) {
