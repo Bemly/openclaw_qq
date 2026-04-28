@@ -2824,7 +2824,19 @@ async function checkPoliticalSpeech(
         });
         clearTimeout(timer);
 
-        const data = await resp.json();
+        const rawText = await resp.text();
+        // Some providers append extra characters or return streaming SSE chunks.
+        // Find the first valid JSON object in the response.
+        let data: any;
+        try {
+            const jsonStart = rawText.indexOf("{");
+            const jsonEnd = rawText.lastIndexOf("}");
+            const jsonStr = rawText.slice(jsonStart, jsonEnd + 1);
+            data = JSON.parse(jsonStr);
+        } catch {
+            console.warn(`[QQ-political] non-JSON response: ${rawText.slice(0, 200)}`);
+            return { isPolitical: false, reason: "" };
+        }
         const content = data?.choices?.[0]?.message?.content?.trim() || "";
 
         const isPolitical = content.startsWith("是") && !content.startsWith("不是");
