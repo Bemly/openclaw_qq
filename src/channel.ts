@@ -998,7 +998,8 @@ interface ImageGenResult {
 
 async function callImageGenerationAPI(
     params: ImageGenParams,
-    config: QQConfig
+    config: QQConfig,
+    providers: Record<string, { baseUrl?: string; apiKey?: string }>
 ): Promise<ImageGenResult> {
     const { prompt, model, endpoint, apiKey } = params;
 
@@ -1018,9 +1019,7 @@ async function callImageGenerationAPI(
         throw new Error(`无效的模型格式: ${model}`);
     }
 
-    const runtime = getQQRuntime();
-    const cfg = runtime.config as any;
-    const providerInfo = cfg?.models?.providers?.[provider];
+    const providerInfo = providers[provider];
     if (!providerInfo) {
         throw new Error(`未配置 provider: ${provider}，请在 OpenClaw 配置中添加 models.providers.${provider}`);
     }
@@ -4121,6 +4120,7 @@ ${current}
                             } else {
                                 client.sendPrivateMsg(userId, `正在生成图片: ${imageGenMatch.prompt}...`);
                             }
+                            const providers = (cfg as any)?.models?.providers || {};
                             const result = await callImageGenerationAPI({
                                 prompt: imageGenMatch.prompt,
                                 quality: imageGenMatch.quality,
@@ -4129,7 +4129,7 @@ ${current}
                                 model: config.imageGenModel!,
                                 endpoint: config.imageGenEndpoint,
                                 apiKey: config.imageGenApiKey,
-                            }, config);
+                            }, config, providers);
                             const to = isGroup
                                 ? `group:${groupId}`
                                 : isGuild
