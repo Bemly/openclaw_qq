@@ -1053,6 +1053,7 @@ interface ImageGenParams {
     model: string;
     endpoint?: string;
     apiKey?: string;
+    images?: string[]; // 图片 URL 列表，用于图生图
 }
 
 interface ImageGenResult {
@@ -1114,6 +1115,7 @@ async function callImageGenerationAPI(
         size: params.size || config.imageGenSize || "1024x1024",
         style: params.style || config.imageGenStyle || "vivid",
         providerType,
+        images: params.images, // 传递图片列表
     });
 
     const headers: Record<string, string> = {
@@ -1214,8 +1216,9 @@ function buildImageGenPayload(params: {
     size: string;
     style: string;
     providerType: "openai" | "bailian" | "custom";
+    images?: string[];
 }): any {
-    const { modelName, prompt, quality, size, style, providerType } = params;
+    const { modelName, prompt, quality, size, style, providerType, images } = params;
 
     if (providerType === "openai") {
         return {
@@ -1227,13 +1230,22 @@ function buildImageGenPayload(params: {
             ...(style && !modelName.includes("dall-e-2") && { style }),
         };
     } else if (providerType === "bailian") {
+        // 构建消息内容：图片 + 文本
+        let content: any[] = [];
+        if (images && images.length > 0) {
+            for (const imgUrl of images) {
+                content.push({ image: imgUrl });
+            }
+        }
+        content.push({ text: prompt });
+
         return {
             model: modelName,
             input: {
                 messages: [
                     {
                         role: "user",
-                        content: [{ text: prompt }],
+                        content,
                     },
                 ],
             },
@@ -4431,7 +4443,16 @@ ${current}
                         detectImageGenRequest(text.trim(), config.imageGenKeywords || "生图:,画:,绘图:");
                     if (imageGenMatch) {
                         try {
-                            console.log(`[QQ-imagegen] triggered by user=${userId} prompt="${imageGenMatch.prompt}"`);
+                            // 获取图片 URL（最多 3 张）
+                            const imageUrls = cachedInboundImages.entries
+                                .filter(e => e.url)
+                                .slice(0, 3)
+                                .map(e => e.url as string);
+
+                            const isImageToImage = imageUrls.length > 0;
+                            const modeTag = isImageToImage ? `图生图 (${imageUrls.length}张)` : "文生图";
+                            console.log(`[QQ-imagegen] triggered by user=${userId} ${modeTag} prompt="${imageGenMatch.prompt}"`);
+
                             const providers = (cfg as any)?.models?.providers || {};
                             const result = await callImageGenerationAPI({
                                 prompt: imageGenMatch.prompt,
@@ -4441,6 +4462,7 @@ ${current}
                                 model: config.imageGenModel!,
                                 endpoint: config.imageGenEndpoint,
                                 apiKey: config.imageGenApiKey,
+                                images: isImageToImage ? imageUrls : undefined,
                             }, config, providers);
                             const imageMsg = `[CQ:image,file=${result.imageUrl}]`;
                             if (isGroup) {
