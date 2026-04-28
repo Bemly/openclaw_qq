@@ -957,34 +957,89 @@ function detectImageGenRequest(text: string, keywords: string): ImageGenMatch | 
     const keywordList = keywords.split(",").map(k => k.trim()).filter(k => k);
     if (keywordList.length === 0) return null;
 
-    // 剥掉开头的 CQ 码（如 [CQ:at,qq=xxx]）和 @username 文本，让 startsWith 能匹配上
+    // 剥掉开头的 CQ 码（如 [CQ:at,qq=xxx]）和 @username 文本
     const cleaned = text.trim()
         .replace(/^\[CQ:[^\]]+\]\s*/, "")
         .replace(/^@\S+\s*/, "")
         .trim();
 
+    // 检查是否包含任意关键词（不限是否在开头）
+    let triggeredKeyword: string | null = null;
+    let triggerIndex = -1;
     for (const keyword of keywordList) {
-        if (cleaned.startsWith(keyword)) {
-            let prompt = cleaned.slice(keyword.length).trim();
-            let quality: string | undefined;
-            let size: string | undefined;
-            let style: string | undefined;
-
-            const paramsMatch = prompt.match(/--\w+=\S+/g);
-            if (paramsMatch) {
-                for (const param of paramsMatch) {
-                    const [key, value] = param.slice(2).split("=");
-                    if (key === "quality") quality = value;
-                    else if (key === "size") size = value;
-                    else if (key === "style") style = value;
-                }
-                prompt = prompt.replace(/--\w+=\S+/g, "").trim();
-            }
-
-            if (prompt) {
-                return { prompt, quality, size, style };
+        const idx = cleaned.indexOf(keyword);
+        if (idx !== -1) {
+            if (triggerIndex === -1 || idx < triggerIndex) {
+                triggerIndex = idx;
+                triggeredKeyword = keyword;
             }
         }
+    }
+
+    if (!triggeredKeyword) return null;
+
+    // 提取 prompt：移除触发关键词和前面的内容
+    let promptPart = cleaned.slice(triggerIndex + triggeredKeyword.length).trim();
+
+    // 清理 -- 参数
+    let quality: string | undefined;
+    let size: string | undefined;
+    let style: string | undefined;
+
+    const paramsMatch = promptPart.match(/--\w+=\S+/g);
+    if (paramsMatch) {
+        for (const param of paramsMatch) {
+            const [key, value] = param.slice(2).split("=");
+            if (key === "quality") quality = value;
+            else if (key === "size") size = value;
+            else if (key === "style") style = value;
+        }
+        promptPart = promptPart.replace(/--\w+=\S+/g, "").trim();
+    }
+
+    // 如果没有通过 --size 指定，扫描全文判断尺寸（优先级：竖 → 横 → 正方形）
+    if (!size) {
+        const fullText = cleaned.toLowerCase();
+
+        // 竖版关键词（按顺序匹配）
+        const portraitKeywords = ["720*1280", "720×1280", "720x1280", "9:16", "竖", "竖版"];
+        for (const kw of portraitKeywords) {
+            if (fullText.includes(kw.toLowerCase())) {
+                size = "720x1280";
+                break;
+            }
+        }
+
+        // 横版关键词（按顺序匹配）
+        if (!size) {
+            const landscapeKeywords = ["1280*720", "1280×720", "1280x720", "16:9", "横", "横版"];
+            for (const kw of landscapeKeywords) {
+                if (fullText.includes(kw.toLowerCase())) {
+                    size = "1280x720";
+                    break;
+                }
+            }
+        }
+
+        // 默认正方形
+        if (!size) {
+            size = "1024x1024";
+        }
+    }
+
+    // 清理 prompt：移除尺寸相关关键词
+    if (promptPart) {
+        const sizeKeywords = ["720*1280", "720×1280", "720x1280", "9:16", "竖", "竖版",
+                             "1280*720", "1280×720", "1280x720", "16:9", "横", "横版"];
+        let cleanedPrompt = promptPart;
+        for (const kw of sizeKeywords) {
+            cleanedPrompt = cleanedPrompt.replace(new RegExp(kw, "gi"), "");
+        }
+        promptPart = cleanedPrompt.trim();
+    }
+
+    if (promptPart) {
+        return { prompt: promptPart, quality, size, style };
     }
 
     return null;
