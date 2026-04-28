@@ -3118,6 +3118,8 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
             const blockedUserIds = [...new Set(parseIdListInput(config.blockedUsers as string | number | Array<string | number> | undefined))];
             const blockedNotifyCooldownMs = Math.max(0, Number(config.blockedNotifyCooldownMs ?? 10000));
 
+            const debugPoliticalModeration = config.debugPoliticalModeration === true;
+
             if (!config.wsUrl) throw new Error("QQ: wsUrl is required");
 
             const existingLiveClient = clients.get(account.accountId);
