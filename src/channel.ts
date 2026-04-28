@@ -1124,7 +1124,7 @@ function determineProviderType(
     provider: string
 ): "openai" | "bailian" | "custom" {
     if (provider === "openai") return "openai";
-    if (provider === "bailian") return "bailian";
+    if (provider === "bailian" || provider === "aliyun") return "bailian";
     return "custom";
 }
 
