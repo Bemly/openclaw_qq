@@ -999,7 +999,7 @@ interface ImageGenResult {
 async function callImageGenerationAPI(
     params: ImageGenParams,
     config: QQConfig,
-    providers: Record<string, { baseUrl?: string; apiKey?: string }>
+    providers: Record<string, { baseUrl?: string; apiKey?: string; endpoint?: string }>
 ): Promise<ImageGenResult> {
     const { prompt, model, endpoint, apiKey } = params;
 
@@ -1057,6 +1057,54 @@ async function callImageGenerationAPI(
         headers["Authorization"] = `Bearer ${requestApiKey}`;
     }
 
+    if (providerType === "bailian") {
+        // 百炼/DashScope 异步生图 API：提交任务 → 轮询结果
+        headers["X-DashScope-Async"] = "enable";
+
+        const response = await fetch(apiUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`生图 API 失败 (${response.status}): ${errorText}`);
+        }
+
+        const taskData = await response.json() as any;
+        const taskId = taskData?.output?.task_id;
+        if (!taskId) {
+            throw new Error(`生图任务创建失败，未返回 task_id: ${JSON.stringify(taskData)}`);
+        }
+        console.log(`[QQ-imagegen] bailian task_id=${taskId}`);
+
+        // 轮询任务状态
+        const maxAttempts = 30;
+        const pollInterval = 2000;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
+            const pollResp = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
+                headers: { "Authorization": `Bearer ${requestApiKey}` },
+            });
+            const pollData = await pollResp.json() as any;
+            const taskStatus = pollData?.output?.task_status;
+            console.log(`[QQ-imagegen] poll attempt=${attempt + 1} status=${taskStatus}`);
+
+            if (taskStatus === "SUCCEEDED") {
+                const url = pollData?.output?.results?.[0]?.url;
+                if (!url) throw new Error(`生图任务完成但无图片 URL: ${JSON.stringify(pollData)}`);
+                return { imageUrl: url };
+            }
+            if (taskStatus === "FAILED") {
+                throw new Error(`生图任务失败: ${JSON.stringify(pollData)}`);
+            }
+            // PENDING / RUNNING → 继续轮询
+        }
+        throw new Error(`生图任务超时（${maxAttempts * pollInterval / 1000}s）: task_id=${taskId}`);
+    }
+
+    // 非百炼（openai / custom）同步 API
     const response = await fetch(apiUrl, {
         method: "POST",
         headers,
@@ -1102,11 +1150,17 @@ function buildImageGenPayload(params: {
     } else if (providerType === "bailian") {
         return {
             model: modelName,
-            input: { prompt },
+            input: {
+                messages: [
+                    {
+                        role: "user",
+                        content: [{ text: prompt }],
+                    },
+                ],
+            },
             parameters: {
                 size: size.replace("x", "*"),
                 n: 1,
-                ...(quality && { quality }),
             },
         };
     } else {
