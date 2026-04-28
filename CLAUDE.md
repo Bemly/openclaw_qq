@@ -47,17 +47,21 @@ Both the CLI and gateway perform a "suspicious ownership" check on the extension
 - CLI (`bemly`, uid=1000) requires: uid=1000 or root
 - Gateway (`trim.openclaw`, uid=951) requires: uid=951 or root
 
-**Workflow:**
+**Deploy workflow (do ALL steps in order):**
 
 ```bash
-# 1. Push source files (requires sshpass, password in external memory)
-sshpass scp src/* fnOS:'/vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/src/'
+# 1. Commit and push to GitHub
+git add <changed files>
+git commit -m "..." && git push origin main
 
-# 2. Ensure ownership is trim.openclaw so gateway can load the plugin
-sshpass ssh fnOS 'chown -R trim.openclaw:trim.openclaw /vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/'
+# 2. Push source files to NAS (requires sshpass, password in external memory)
+sshpass -p '<pw>' scp src/<changed1> src/<changed2> ... fnOS:'/vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/src/'
+
+# 3. Ensure ownership is trim.openclaw so gateway can load the plugin
+sshpass -p '<pw>' ssh fnOS 'chown -R trim.openclaw:trim.openclaw /vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/'
 ```
 
-**3. Restart via NAS web UI** — the CLI cannot restart the gateway due to the ownership conflict. Go to 飞牛 NAS web interface → 套件中心 (app center) → stop then start `trim.openclaw`.
+**4. Restart via NAS web UI** — the CLI cannot restart the gateway due to the ownership conflict. Go to 飞牛 NAS web interface → 套件中心 (app center) → stop then start `trim.openclaw`.
 
 To verify: use the NAS web UI's OpenClaw monitor, or run:
 ```bash
