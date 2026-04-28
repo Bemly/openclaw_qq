@@ -2761,7 +2761,10 @@ async function checkPoliticalSpeech(
         const providers = cfg?.models?.providers || {};
         const provider = providers[providerId];
         if (provider?.baseUrl) {
-            endpoint = provider.baseUrl.replace(/\/+$/, "") + "/v1/chat/completions";
+            const base = provider.baseUrl.replace(/\/+$/, "");
+            // Some providers include /v1 in baseUrl, others only have the domain root.
+            // Append /chat/completions only if base doesn't already contain /v1.
+            endpoint = base.includes("/v1") ? base + "/chat/completions" : base + "/v1/chat/completions";
             apiKey = provider.apiKey || "";
         }
         model = modelName;
@@ -2786,7 +2789,8 @@ async function checkPoliticalSpeech(
                 const providers = cfg?.models?.providers || {};
                 const provider = providers[providerId];
                 if (provider?.baseUrl) {
-                    endpoint = provider.baseUrl.replace(/\/+$/, "") + "/v1/chat/completions";
+                    const base = provider.baseUrl.replace(/\/+$/, "");
+                    endpoint = base.includes("/v1") ? base + "/chat/completions" : base + "/v1/chat/completions";
                     apiKey = provider.apiKey || "";
                 }
             }
@@ -3365,7 +3369,7 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                             cfg,
                         );
                         if (debugPoliticalModeration) {
-                            console.log(`[QQ-political] check start group=${groupId} user=${userId} len=${text.length}`);
+                            console.log(`[QQ-political] check start group=${groupId} user=${userId} len=${text.length} model=${config.politicalModerationModel || "(main)"}`);
                             console.log(`[QQ-political] response: "${politicalResult.reason || politicalResult.isPolitical}" isPolitical=${politicalResult.isPolitical}`);
                         }
                         if (politicalResult.isPolitical) {
