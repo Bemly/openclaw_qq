@@ -1096,7 +1096,8 @@ async function callImageGenerationAPI(
             console.log(`[QQ-imagegen] poll attempt=${attempt + 1} status=${taskStatus}`);
 
             if (taskStatus === "SUCCEEDED") {
-                const url = pollData?.output?.results?.[0]?.url;
+                const url = pollData?.output?.choices?.[0]?.message?.content?.[0]?.image
+                    || pollData?.output?.results?.[0]?.url;
                 if (!url) throw new Error(`生图任务完成但无图片 URL: ${JSON.stringify(pollData)}`);
                 return { imageUrl: url };
             }
