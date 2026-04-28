@@ -2768,9 +2768,19 @@ async function checkPoliticalSpeech(
     }
 
     if (!endpoint || !model) {
-        const defaultModel = cfg?.agents?.defaults?.model;
-        if (typeof defaultModel === "string" && defaultModel.includes("/")) {
-            const [providerId, modelName] = defaultModel.split("/", 2);
+        // Fallback: try primary model from agents.defaults (may be string, {primary,fallbacks}, or map)
+        const defaultModel = cfg?.agents?.defaults?.model || cfg?.agents?.defaults?.models;
+        let resolvedDefault: string | undefined;
+        if (typeof defaultModel === "string" && defaultModel.trim()) {
+            resolvedDefault = defaultModel.trim();
+        } else if (defaultModel?.primary) {
+            resolvedDefault = defaultModel.primary;
+        } else if (defaultModel && typeof defaultModel === "object") {
+            const keys = Object.keys(defaultModel).filter((k: string) => k.includes("/"));
+            if (keys.length > 0) resolvedDefault = keys[0];
+        }
+        if (resolvedDefault && resolvedDefault.includes("/")) {
+            const [providerId, modelName] = resolvedDefault.split("/", 2);
             if (!model) model = modelName;
             if (!endpoint) {
                 const providers = cfg?.models?.providers || {};
@@ -2784,7 +2794,7 @@ async function checkPoliticalSpeech(
     }
 
     if (!endpoint || !model) {
-        console.warn("[QQ-political] no model endpoint configured, skipping");
+        console.warn(`[QQ-political] no model endpoint configured (explicit="${rawModel}", endpoint="${endpoint}", resolved="${model || "(none)"}")`);
         return { isPolitical: false, reason: "" };
     }
 
