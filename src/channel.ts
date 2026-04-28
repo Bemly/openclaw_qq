@@ -1018,22 +1018,38 @@ async function callImageGenerationAPI(
         throw new Error(`无效的模型格式: ${model}`);
     }
 
-    const providerConfig = await getProviderConfig(provider);
-    if (!providerConfig) {
-        throw new Error(`未找到 provider 配置: ${provider}`);
+    const runtime = getQQRuntime();
+    const cfg = runtime.config as any;
+    const providerInfo = cfg?.models?.providers?.[provider];
+    if (!providerInfo) {
+        throw new Error(`未配置 provider: ${provider}，请在 OpenClaw 配置中添加 models.providers.${provider}`);
     }
 
+    const providerType = determineProviderType(provider);
+
+    // 确定最终的 API URL
+    let apiUrl: string;
+    if (endpoint) {
+        apiUrl = endpoint;
+    } else if (provider === "openai") {
+        apiUrl = "https://api.openai.com/v1/images/generations";
+    } else if (provider === "bailian") {
+        apiUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation";
+    } else {
+        const baseUrl = providerInfo.baseUrl || providerInfo.endpoint || "https://api.example.com/v1";
+        apiUrl = baseUrl.replace(/\/$/, "") + "/images/generations";
+    }
+    const requestApiKey = apiKey || providerInfo.apiKey;
+
+    // 构建 payload
     const payload = buildImageGenPayload({
         modelName,
         prompt,
         quality: params.quality || config.imageGenQuality || "standard",
         size: params.size || config.imageGenSize || "1024x1024",
         style: params.style || config.imageGenStyle || "vivid",
-        providerType: providerConfig.type,
+        providerType,
     });
-
-    const apiUrl = endpoint || providerConfig.baseUrl;
-    const requestApiKey = apiKey || providerConfig.apiKey;
 
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -1054,38 +1070,7 @@ async function callImageGenerationAPI(
     }
 
     const data = await response.json();
-    return parseImageGenResponse(data, providerConfig.type);
-}
-
-interface ProviderConfig {
-    baseUrl: string;
-    apiKey: string;
-    type: "openai" | "bailian" | "custom";
-}
-
-async function getProviderConfig(
-    provider: string
-): Promise<ProviderConfig | null> {
-    const runtime = getQQRuntime();
-    const cfg = runtime.config as any;
-
-    const providerInfo = cfg?.models?.providers?.[provider];
-    if (!providerInfo) {
-        throw new Error(`未配置 provider: ${provider}，请在 OpenClaw 配置中添加 models.providers.${provider}`);
-    }
-
-    let baseUrl = providerInfo.baseUrl || "";
-    if (!baseUrl) {
-        if (provider === "openai") baseUrl = "https://api.openai.com/v1/images/generations";
-        else if (provider === "bailian") baseUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation";
-        else baseUrl = `${providerInfo.endpoint || "https://api.example.com/v1/images/generations"}`;
-    }
-
-    return {
-        baseUrl,
-        apiKey: providerInfo.apiKey || "",
-        type: determineProviderType(provider),
-    };
+    return parseImageGenResponse(data, providerType);
 }
 
 function determineProviderType(
