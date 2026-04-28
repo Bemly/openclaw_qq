@@ -2740,6 +2740,14 @@ async function sendOneBotMessageWithAck(client: OneBotClient, to: string, messag
 }
 
 // ── 政治言论审核 ──────────────────────────────────────
+function buildPoliticalEndpoint(baseUrl: string): string {
+    const clean = baseUrl.replace(/\/+$/, "");
+    if (clean.endsWith("/v1") || clean.endsWith("/compatible-mode/v1")) {
+        return `${clean}/chat/completions`;
+    }
+    return `${clean}/v1/chat/completions`;
+}
+
 async function checkPoliticalSpeech(
     messageText: string,
     modelConfig: string | undefined,
@@ -2761,10 +2769,7 @@ async function checkPoliticalSpeech(
         const providers = cfg?.models?.providers || {};
         const provider = providers[providerId];
         if (provider?.baseUrl) {
-            const base = provider.baseUrl.replace(/\/+$/, "");
-            // Some providers include /v1 in baseUrl, others only have the domain root.
-            // Append /chat/completions only if base doesn't already contain /v1.
-            endpoint = base.includes("/v1") ? base + "/chat/completions" : base + "/v1/chat/completions";
+            endpoint = buildPoliticalEndpoint(provider.baseUrl);
             apiKey = provider.apiKey || "";
         }
         model = modelName;
@@ -2789,8 +2794,7 @@ async function checkPoliticalSpeech(
                 const providers = cfg?.models?.providers || {};
                 const provider = providers[providerId];
                 if (provider?.baseUrl) {
-                    const base = provider.baseUrl.replace(/\/+$/, "");
-                    endpoint = base.includes("/v1") ? base + "/chat/completions" : base + "/v1/chat/completions";
+                    endpoint = buildPoliticalEndpoint(provider.baseUrl);
                     apiKey = provider.apiKey || "";
                 }
             }
@@ -2828,19 +2832,13 @@ async function checkPoliticalSpeech(
         });
         clearTimeout(timer);
 
-        const rawText = await resp.text();
-        // Some providers append extra characters or return streaming SSE chunks.
-        // Find the first valid JSON object in the response.
-        let data: any;
-        try {
-            const jsonStart = rawText.indexOf("{");
-            const jsonEnd = rawText.lastIndexOf("}");
-            const jsonStr = rawText.slice(jsonStart, jsonEnd + 1);
-            data = JSON.parse(jsonStr);
-        } catch {
-            console.warn(`[QQ-political] non-JSON response: ${rawText.slice(0, 200)}`);
+        if (!resp.ok) {
+            const errText = await resp.text().catch(() => "");
+            console.warn(`[QQ-political] HTTP ${resp.status}: ${errText.slice(0, 300)}`);
             return { isPolitical: false, reason: "" };
         }
+
+        const data = await resp.json();
         const content = data?.choices?.[0]?.message?.content?.trim() || "";
 
         const isPolitical = content.startsWith("是") && !content.startsWith("不是");
