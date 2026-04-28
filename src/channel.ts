@@ -73,6 +73,8 @@ const sessionQueues = new Map<string, SessionQueue>();
 
 let lastImageGenTimestamp = 0;
 
+const politicalModerationCooldown = new Map<string, number>();
+
 async function drainSessionQueue(sessionKey: string, config: QQConfig, sendMessageFn: (msg: string) => void) {
     const q = sessionQueues.get(sessionKey);
     if (!q || q.isProcessing || q.pendingPayloads.length === 0) return;
@@ -2737,6 +2739,96 @@ async function sendOneBotMessageWithAck(client: OneBotClient, to: string, messag
     }
 }
 
+// ── 政治言论审核 ──────────────────────────────────────
+async function checkPoliticalSpeech(
+    messageText: string,
+    modelConfig: string | undefined,
+    cfg: any,
+    timeoutMs: number = 5000,
+): Promise<{ isPolitical: boolean; reason: string }> {
+    const fetchImpl = (globalThis as any).fetch;
+    if (typeof fetchImpl !== "function") {
+        return { isPolitical: false, reason: "" };
+    }
+
+    let endpoint = "";
+    let model = "";
+    let apiKey = "";
+
+    const rawModel = typeof modelConfig === "string" ? modelConfig.trim() : "";
+    if (rawModel && rawModel.includes("/")) {
+        const [providerId, modelName] = rawModel.split("/", 2);
+        const providers = cfg?.models?.providers || {};
+        const provider = providers[providerId];
+        if (provider?.baseUrl) {
+            endpoint = provider.baseUrl.replace(/\/+$/, "") + "/v1/chat/completions";
+            apiKey = provider.apiKey || "";
+        }
+        model = modelName;
+    }
+
+    if (!endpoint || !model) {
+        const defaultModel = cfg?.agents?.defaults?.model;
+        if (typeof defaultModel === "string" && defaultModel.includes("/")) {
+            const [providerId, modelName] = defaultModel.split("/", 2);
+            if (!model) model = modelName;
+            if (!endpoint) {
+                const providers = cfg?.models?.providers || {};
+                const provider = providers[providerId];
+                if (provider?.baseUrl) {
+                    endpoint = provider.baseUrl.replace(/\/+$/, "") + "/v1/chat/completions";
+                    apiKey = provider.apiKey || "";
+                }
+            }
+        }
+    }
+
+    if (!endpoint || !model) {
+        console.warn("[QQ-political] no model endpoint configured, skipping");
+        return { isPolitical: false, reason: "" };
+    }
+
+    const systemPrompt =
+        "你是一个内容审核助手。请判断用户输入是否包含政治相关言论（包括政治敏感话题、政治人物讨论、政策评论、政治事件等）。如果包含政治言论，请回复\"是\"，如需说明原因请回复\"是，原因：XXX\"（XXX 简述原因，不超过 20 字）。如果不包含政治言论，请只回复\"不是\"。";
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const resp = await fetchImpl(endpoint, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            },
+            body: JSON.stringify({
+                model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: `请判断以下内容：\n\n${messageText}` },
+                ],
+                temperature: 0,
+                max_tokens: 64,
+            }),
+            signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        const data = await resp.json();
+        const content = data?.choices?.[0]?.message?.content?.trim() || "";
+
+        const isPolitical = content.startsWith("是") && !content.startsWith("不是");
+        const reason = isPolitical
+            ? content.replace(/^(是[，,：:\s]*)/, "").trim() || "检测到政治言论"
+            : "";
+
+        return { isPolitical, reason };
+    } catch (err) {
+        console.error(`[QQ-political] check failed: ${String(err)}`);
+        return { isPolitical: false, reason: "" };
+    }
+}
+
 export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
     id: "qq",
     meta: {
@@ -3239,6 +3331,46 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                             }
                         }
                         if (resolvedText) text = resolvedText;
+                    }
+
+                    // ── 政治言论审核 ──
+                    if (config.politicalModeration === true && isGroup && text.trim()) {
+                        const politicalResult = await checkPoliticalSpeech(
+                            text.trim(),
+                            config.politicalModerationModel as string | undefined,
+                            cfg,
+                        );
+                        if (debugPoliticalModeration) {
+                            console.log(`[QQ-political] check start group=${groupId} user=${userId} len=${text.length}`);
+                            console.log(`[QQ-political] response: "${politicalResult.reason || politicalResult.isPolitical}" isPolitical=${politicalResult.isPolitical}`);
+                        }
+                        if (politicalResult.isPolitical) {
+                            console.log(`[QQ-political] DETECTED group=${groupId} user=${userId} reason="${politicalResult.reason}"`);
+
+                            if (event.message_id) {
+                                client.deleteMsg(event.message_id);
+                                if (debugPoliticalModeration) {
+                                    console.log(`[QQ-political] deleted message_id=${event.message_id}`);
+                                }
+                            }
+
+                            const groupKey = `${account.accountId}:${groupId}`;
+                            const now = Date.now();
+                            const cooldownMs = config.politicalModerationCooldownMs ?? 60000;
+                            const lastAnnounced = politicalModerationCooldown.get(groupKey) || 0;
+
+                            if (now - lastAnnounced >= cooldownMs) {
+                                politicalModerationCooldown.set(groupKey, now);
+                                client.sendGroupMsg(groupId, politicalResult.reason);
+                                console.log(`[QQ-political] sent reason to group=${groupId}`);
+                            } else {
+                                if (debugPoliticalModeration) {
+                                    console.log(`[QQ-political] silent delete (cooldown, ${cooldownMs - (now - lastAnnounced)}ms remaining)`);
+                                }
+                            }
+
+                            return;
+                        }
                     }
 
                     if (blockedUserIds.includes(userId)) return;
