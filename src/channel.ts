@@ -955,9 +955,15 @@ function detectImageGenRequest(text: string, keywords: string): ImageGenMatch | 
     const keywordList = keywords.split(",").map(k => k.trim()).filter(k => k);
     if (keywordList.length === 0) return null;
 
+    // 剥掉开头的 CQ 码（如 [CQ:at,qq=xxx]）和 @username 文本，让 startsWith 能匹配上
+    const cleaned = text.trim()
+        .replace(/^\[CQ:[^\]]+\]\s*/, "")
+        .replace(/^@\S+\s*/, "")
+        .trim();
+
     for (const keyword of keywordList) {
-        if (text.startsWith(keyword)) {
-            let prompt = text.slice(keyword.length).trim();
+        if (cleaned.startsWith(keyword)) {
+            let prompt = cleaned.slice(keyword.length).trim();
             let quality: string | undefined;
             let size: string | undefined;
             let style: string | undefined;
@@ -3688,6 +3694,21 @@ ${current}
                             if (text.includes(kw)) {
                                 isTriggered = true;
                                 keywordTriggered = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // 生图关键词匹配也视为触发（群聊不@也能直接生效）
+                    if (!isTriggered && config.imageGenKeywords?.trim()) {
+                        const genCleaned = text.trim()
+                            .replace(/^\[CQ:[^\]]+\]\s*/, "")
+                            .replace(/^@\S+\s*/, "")
+                            .trim();
+                        const genKwList = config.imageGenKeywords.split(",").map(k => k.trim()).filter(k => k);
+                        for (const kw of genKwList) {
+                            if (genCleaned.startsWith(kw)) {
+                                isTriggered = true;
                                 break;
                             }
                         }
