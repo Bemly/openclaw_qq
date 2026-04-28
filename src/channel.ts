@@ -3876,7 +3876,9 @@ ${current}
 
                     // ── 独立识图模块 ──────────────────────────
                     const visionModelRaw = config.visionModel || "";
-                    if (visionModelRaw && cachedInboundImages.entries.some(e => e.path)) {
+                    // 尊重 proactiveReplyProbability：非触发的群/频道消息不在概率内就跳过识图
+                    const skipVisionByProactive = (isGroup || isGuild) && !isTriggered && config.proactiveReplyProbability > 0;
+                    if (visionModelRaw && cachedInboundImages.entries.some(e => e.path) && !skipVisionByProactive) {
                         const cachedPaths = cachedInboundImages.entries
                             .filter(e => e.path)
                             .map(e => e.path as string);
