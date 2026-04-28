@@ -71,6 +71,8 @@ type QQSetupInput = ChannelSetupInput & {
 
 const sessionQueues = new Map<string, SessionQueue>();
 
+let lastImageGenTimestamp = 0;
+
 async function drainSessionQueue(sessionKey: string, config: QQConfig, sendMessageFn: (msg: string) => void) {
     const q = sessionQueues.get(sessionKey);
     if (!q || q.isProcessing || q.pendingPayloads.length === 0) return;
@@ -938,6 +940,218 @@ async function grokDrawDirect(prompt: string): Promise<{ ok: true; url: string }
     } catch (err) {
         return { ok: false, error: `调用 Grok 失败: ${String(err)}` };
     }
+}
+
+interface ImageGenMatch {
+    prompt: string;
+    quality?: string;
+    size?: string;
+    style?: string;
+}
+
+function detectImageGenRequest(text: string, keywords: string): ImageGenMatch | null {
+    if (!text || !keywords) return null;
+
+    const keywordList = keywords.split(",").map(k => k.trim()).filter(k => k);
+    if (keywordList.length === 0) return null;
+
+    for (const keyword of keywordList) {
+        if (text.startsWith(keyword)) {
+            let prompt = text.slice(keyword.length).trim();
+            let quality: string | undefined;
+            let size: string | undefined;
+            let style: string | undefined;
+
+            const paramsMatch = prompt.match(/--\w+=\S+/g);
+            if (paramsMatch) {
+                for (const param of paramsMatch) {
+                    const [key, value] = param.slice(2).split("=");
+                    if (key === "quality") quality = value;
+                    else if (key === "size") size = value;
+                    else if (key === "style") style = value;
+                }
+                prompt = prompt.replace(/--\w+=\S+/g, "").trim();
+            }
+
+            if (prompt) {
+                return { prompt, quality, size, style };
+            }
+        }
+    }
+
+    return null;
+}
+
+interface ImageGenParams {
+    prompt: string;
+    quality?: string;
+    size?: string;
+    style?: string;
+    model: string;
+    endpoint?: string;
+    apiKey?: string;
+}
+
+interface ImageGenResult {
+    imageUrl: string;
+}
+
+async function callImageGenerationAPI(
+    params: ImageGenParams,
+    config: QQConfig
+): Promise<ImageGenResult> {
+    const { prompt, model, endpoint, apiKey } = params;
+
+    if (config.imageGenRateLimitMs > 0) {
+        const now = Date.now();
+        const elapsed = now - lastImageGenTimestamp;
+        if (elapsed < config.imageGenRateLimitMs) {
+            const waitTime = config.imageGenRateLimitMs - elapsed;
+            console.log(`[QQ] 生图速率限制: 延迟 ${waitTime}ms`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+    }
+    lastImageGenTimestamp = Date.now();
+
+    const [provider, modelName] = model.split("/");
+    if (!provider || !modelName) {
+        throw new Error(`无效的模型格式: ${model}`);
+    }
+
+    const providerConfig = await getProviderConfig(provider);
+    if (!providerConfig) {
+        throw new Error(`未找到 provider 配置: ${provider}`);
+    }
+
+    const payload = buildImageGenPayload({
+        modelName,
+        prompt,
+        quality: params.quality || config.imageGenQuality || "standard",
+        size: params.size || config.imageGenSize || "1024x1024",
+        style: params.style || config.imageGenStyle || "vivid",
+        providerType: providerConfig.type,
+    });
+
+    const apiUrl = endpoint || providerConfig.baseUrl;
+    const requestApiKey = apiKey || providerConfig.apiKey;
+
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+    };
+    if (requestApiKey) {
+        headers["Authorization"] = `Bearer ${requestApiKey}`;
+    }
+
+    const response = await fetch(apiUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`生图 API 失败 (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json();
+    return parseImageGenResponse(data, providerConfig.type);
+}
+
+interface ProviderConfig {
+    baseUrl: string;
+    apiKey: string;
+    type: "openai" | "bailian" | "custom";
+}
+
+async function getProviderConfig(
+    provider: string
+): Promise<ProviderConfig | null> {
+    const runtime = getQQRuntime();
+    const cfg = runtime.config as any;
+
+    const providerInfo = cfg?.models?.providers?.[provider];
+    if (!providerInfo) {
+        throw new Error(`未配置 provider: ${provider}，请在 OpenClaw 配置中添加 models.providers.${provider}`);
+    }
+
+    let baseUrl = providerInfo.baseUrl || "";
+    if (!baseUrl) {
+        if (provider === "openai") baseUrl = "https://api.openai.com/v1/images/generations";
+        else if (provider === "bailian") baseUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation";
+        else baseUrl = `${providerInfo.endpoint || "https://api.example.com/v1/images/generations"}`;
+    }
+
+    return {
+        baseUrl,
+        apiKey: providerInfo.apiKey || "",
+        type: determineProviderType(provider),
+    };
+}
+
+function determineProviderType(
+    provider: string
+): "openai" | "bailian" | "custom" {
+    if (provider === "openai") return "openai";
+    if (provider === "bailian") return "bailian";
+    return "custom";
+}
+
+function buildImageGenPayload(params: {
+    modelName: string;
+    prompt: string;
+    quality: string;
+    size: string;
+    style: string;
+    providerType: "openai" | "bailian" | "custom";
+}): any {
+    const { modelName, prompt, quality, size, style, providerType } = params;
+
+    if (providerType === "openai") {
+        return {
+            model: modelName,
+            prompt,
+            n: 1,
+            quality,
+            size,
+            ...(style && !modelName.includes("dall-e-2") && { style }),
+        };
+    } else if (providerType === "bailian") {
+        return {
+            model: modelName,
+            input: { prompt },
+            parameters: {
+                size: size.replace("x", "*"),
+                n: 1,
+                ...(quality && { quality }),
+            },
+        };
+    } else {
+        return {
+            model: modelName,
+            prompt,
+            n: 1,
+            size,
+            ...(quality && { quality }),
+            ...(style && { style }),
+        };
+    }
+}
+
+function parseImageGenResponse(
+    data: any,
+    providerType: "openai" | "bailian" | "custom"
+): ImageGenResult {
+    if (providerType === "openai" || providerType === "custom") {
+        if (data.data?.[0]?.url) {
+            return { imageUrl: data.data[0].url };
+        }
+    } else if (providerType === "bailian") {
+        if (data.output?.results?.[0]?.url) {
+            return { imageUrl: data.output.results[0].url };
+        }
+    }
+
+    throw new Error(`无法解析生图响应: ${JSON.stringify(data)}`);
 }
 
 function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig): OpenClawConfig {
@@ -3909,6 +4123,53 @@ ${current}
                         console.log(`[QQ-vision] no description: ${result.error || "unknown"}, falling through to main model`);
                     }
                     // ── END 独立识图模块 ──────────────────────
+
+                    // ── 生图功能 ─────────────────────────────
+                    const imageGenMatch = config.enableImageGen !== false &&
+                        config.imageGenModel?.trim() &&
+                        detectImageGenRequest(text.trim(), config.imageGenKeywords || "生图:,画:,绘图:");
+                    if (imageGenMatch) {
+                        try {
+                            console.log(`[QQ-imagegen] triggered by user=${userId} prompt="${imageGenMatch.prompt}"`);
+                            if (isGroup) {
+                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] 正在生成图片: ${imageGenMatch.prompt}...`);
+                            } else {
+                                client.sendPrivateMsg(userId, `正在生成图片: ${imageGenMatch.prompt}...`);
+                            }
+                            const result = await callImageGenerationAPI({
+                                prompt: imageGenMatch.prompt,
+                                quality: imageGenMatch.quality,
+                                size: imageGenMatch.size,
+                                style: imageGenMatch.style,
+                                model: config.imageGenModel!,
+                                endpoint: config.imageGenEndpoint,
+                                apiKey: config.imageGenApiKey,
+                            }, config);
+                            const to = isGroup
+                                ? `group:${groupId}`
+                                : isGuild
+                                    ? `guild:${guildId}:${channelId}`
+                                    : `user:${userId}`;
+                            await runtime.channel.message.sendMedia({
+                                to,
+                                text: `🎨 生图完成 - ${imageGenMatch.prompt}`,
+                                mediaUrl: result.imageUrl,
+                                accountId: account.accountId,
+                            });
+                            console.log(`[QQ-imagegen] success url=${result.imageUrl}`);
+                            return;
+                        } catch (err) {
+                            console.error("[QQ-imagegen] failed:", err);
+                            const errorMsg = `⚠️ 生图失败: ${err instanceof Error ? err.message : String(err)}`;
+                            if (isGroup) {
+                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] ${errorMsg}`);
+                            } else {
+                                client.sendPrivateMsg(userId, errorMsg);
+                            }
+                            return;
+                        }
+                    }
+                    // ── END 生图功能 ─────────────────────────
 
                     if (config.debugLayerTrace) {
                         const mediaPathCount = Array.isArray((inboundMediaPayload as any).MediaPaths)

@@ -125,6 +125,15 @@ export const QQConfigSchema = z.object({
   forwardNodeName: z.preprocess((value) => normalizeLooseString(value), z.string().optional().default("OpenClaw")).describe("启用长回复合并转发时，节点显示昵称。默认 OpenClaw。"),
   atSenderInGroupReply: BooleanInputSchema(false).describe("群聊回复时是否在第一条消息前艾特发送者。默认关闭。"),
   proactiveReplyProbability: NumberInputSchema(0).describe("主动回复概率（0~1），默认 0=关闭。设为 0.05 即 5% 概率随机回复未触发的群消息。不受 keywordOnlyTrigger 控制，与关键词100%回复共存。"),
+  imageGenModel: IdListStringSchema.describe("生图模型链（逗号分隔），如 openai/dall-e-3, bailian/wanx-v1。留空则禁用生图。"),
+  imageGenKeywords: z.preprocess((value) => normalizeLooseString(value), z.string().optional()).describe("生图触发关键词，逗号分隔。如 \"生图:,画:,绘图:\"。关键词后跟提示词，如 \"生图:一只猫\"。"),
+  enableImageGen: BooleanInputSchema(true).describe("是否启用生图功能。需配置 imageGenModel 后生效。"),
+  imageGenEndpoint: z.preprocess((value) => normalizeLooseString(value), z.string().optional()).describe("自定义生图 API endpoint。留空则使用默认。"),
+  imageGenApiKey: z.preprocess((value) => normalizeLooseString(value), z.string().optional()).describe("生图 API Key（选填）。留空则使用 OpenClaw 模型配置中的默认 API Key。"),
+  imageGenQuality: z.preprocess((value) => normalizeLooseString(value)?.toLowerCase(), z.enum(["standard", "hd"]).optional().default("standard")).describe("图片质量：standard（标准）或 hd（高清）。默认 standard。"),
+  imageGenSize: z.preprocess((value) => normalizeLooseString(value), z.string().optional().default("1024x1024")).describe("图片尺寸，如 1024x1024。支持格式取决于具体模型。默认 1024x1024。"),
+  imageGenStyle: z.preprocess((value) => normalizeLooseString(value)?.toLowerCase(), z.enum(["vivid", "natural"]).optional().default("vivid")).describe("图片风格：vivid（生动）或 natural（自然，仅 DALL-E 3）。默认 vivid。"),
+  imageGenRateLimitMs: NumberInputSchema(0).describe("生图请求间隔（毫秒）。默认 0=无限制。设为 5000 即两次生图至少间隔 5 秒。"),
 }).passthrough();
 
 export type QQConfig = z.infer<typeof QQConfigSchema>;
