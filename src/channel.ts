@@ -1032,8 +1032,11 @@ async function callImageGenerationAPI(
         apiUrl = endpoint;
     } else if (provider === "openai") {
         apiUrl = "https://api.openai.com/v1/images/generations";
-    } else if (provider === "bailian") {
-        apiUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation";
+    } else if (providerType === "bailian") {
+        throw new Error(
+            "百炼生图需要配置 imageGenEndpoint，请在 QQ 通道配置中添加: " +
+            "\"imageGenEndpoint\": \"https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation\""
+        );
     } else {
         const baseUrl = providerInfo.baseUrl || providerInfo.endpoint || "https://api.example.com/v1";
         apiUrl = baseUrl.replace(/\/$/, "") + "/images/generations";
@@ -1084,7 +1087,8 @@ async function callImageGenerationAPI(
         const pollInterval = 2000;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             await new Promise(resolve => setTimeout(resolve, pollInterval));
-            const pollResp = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
+            const pollBase = new URL(apiUrl).origin;
+            const pollResp = await fetch(`${pollBase}/api/v1/tasks/${taskId}`, {
                 headers: { "Authorization": `Bearer ${requestApiKey}` },
             });
             const pollData = await pollResp.json() as any;
