@@ -3892,10 +3892,13 @@ ${current}
                         });
                         if (result.description) {
                             console.log(`[QQ-vision] delivering ${result.description.length} chars directly, skipping main model`);
+                            // 尊重 rateLimitMs 延迟
+                            const rateLimit = config.rateLimitMs ?? 1000;
+                            if (rateLimit > 0) await sleep(rateLimit);
                             // 直接发送识图描述，不走主模型
                             const chunks = splitMessage(result.description, config.maxMessageLength ?? 4000);
                             for (let ci = 0; ci < chunks.length; ci++) {
-                                if (ci > 0) await sleep(config.rateLimitMs ?? 1000);
+                                if (ci > 0 && rateLimit > 0) await sleep(rateLimit);
                                 if (isGroup) client.sendGroupMsg(groupId, chunks[ci]);
                                 else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunks[ci]);
                                 else client.sendPrivateMsg(userId, chunks[ci]);
