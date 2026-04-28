@@ -3888,6 +3888,7 @@ ${current}
                             imagePaths: cachedPaths,
                             visionModelRaw,
                             visionPrompt: config.visionModelPrompt || "请详细描述图片内容",
+                            visionRateLimitMs: config.visionRateLimitMs ?? 0,
                             providers,
                         });
                         if (result.description) {

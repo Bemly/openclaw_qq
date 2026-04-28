@@ -115,11 +115,30 @@ async function callSingleVisionModel(
     return null;
 }
 
+// ── Rate limiting ─────────────────────────────────────────────
+let lastVisionApiCallTs = 0;
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitVisionRateLimit(rateLimitMs: number): Promise<void> {
+    if (rateLimitMs <= 0) return;
+    const elapsed = Date.now() - lastVisionApiCallTs;
+    if (elapsed < rateLimitMs) {
+        const waitMs = rateLimitMs - elapsed;
+        console.log(`[QQ-vision] rate limiting: waiting ${waitMs}ms before next API call...`);
+        await sleep(waitMs);
+    }
+    lastVisionApiCallTs = Date.now();
+}
+
 // ── Main entry ────────────────────────────────────────────────
 export interface VisionContext {
     imagePaths: string[];
     visionModelRaw: string;
     visionPrompt: string;
+    visionRateLimitMs?: number;
     providers: Record<string, { baseUrl?: string; apiKey?: string }>;
 }
 
@@ -154,6 +173,10 @@ export async function describeImages(ctx: VisionContext): Promise<VisionResult> 
         };
 
         try {
+            // 调用 API 前先等 rate limit
+            if (ctx.visionRateLimitMs && ctx.visionRateLimitMs > 0) {
+                await waitVisionRateLimit(ctx.visionRateLimitMs);
+            }
             console.log(`[QQ-vision] calling ${provider}/${model} with ${ctx.imagePaths.length} image(s)...`);
             const startTs = Date.now();
             const description = await callSingleVisionModel(ctx.imagePaths, ctx.visionPrompt, spec);

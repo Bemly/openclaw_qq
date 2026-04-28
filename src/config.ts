@@ -105,6 +105,7 @@ export const QQConfigSchema = z.object({
   cacheInboundImagesToLocal: BooleanInputSchema(true).describe("是否将当前消息以及引用/转发上下文里识别到的图片缓存到本地 MediaPaths。默认开启，便于 ACP 与多模态 agent 实际读图。关闭后遇到图片消息直接跳过不回复。"),
   visionModel: IdListStringSchema.describe("独立识图模块：逗号分隔的视觉模型链 (provider/model)，如 bailian/qwen-vl-max, moore/GLM-4.7。配了就用独立识图，不走主模型。"),
   visionModelPrompt: z.preprocess((value) => normalizeLooseString(value), z.string().optional().default("请逐一描述用户发送的每张图片内容（物体、人物、文字、场景等）。只回答图片描述，不要说其他话。")).describe("独立识图模块：发给视觉模型的提示词。"),
+  visionRateLimitMs: NumberInputSchema(0).describe("独立识图模块：两次 API 调用之间的最小间隔（毫秒）。默认 0=无限制。设为 2000 即两次识图请求至少间隔 2 秒。"),
   blockStreaming: BooleanInputSchema(true).describe("是否按 assistant message 分块发送回复。默认开启，推荐配合 message_end，让 commentary/final 按完整消息落地。"),
   blockStreamingBreak: z.preprocess((value) => normalizeLooseString(value)?.toLowerCase(), z.enum(["text_end", "message_end"]).optional().default("message_end")).describe("分块发送的边界。默认 message_end：等单条 assistant message 完整生成后再发，更适合 QQ 群聊。"),
   maxReplyLayers: NumberInputSchema(5).describe("reply 最大递归层数。默认 5。"),
