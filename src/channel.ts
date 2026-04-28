@@ -4205,14 +4205,13 @@ ${current}
                                 endpoint: config.imageGenEndpoint,
                                 apiKey: config.imageGenApiKey,
                             }, config, providers);
-                            const caption = `🎨 生图完成 - ${imageGenMatch.prompt}`;
                             const imageMsg = `[CQ:image,file=${result.imageUrl}]`;
                             if (isGroup) {
-                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] ${caption}\n${imageMsg}`);
+                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] ${imageMsg}`);
                             } else if (isGuild) {
-                                client.sendGuildChannelMsg(guildId, channelId, `${caption}\n${imageMsg}`);
+                                client.sendGuildChannelMsg(guildId, channelId, imageMsg);
                             } else {
-                                client.sendPrivateMsg(userId, `${caption}\n${imageMsg}`);
+                                client.sendPrivateMsg(userId, imageMsg);
                             }
                             console.log(`[QQ-imagegen] success url=${result.imageUrl}`);
                             return;
