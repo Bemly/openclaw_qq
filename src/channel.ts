@@ -3372,6 +3372,7 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                             text.trim(),
                             config.politicalModerationModel as string | undefined,
                             cfg,
+                            config.politicalModerationTimeoutMs ?? 5000,
                         );
                         if (debugPoliticalModeration) {
                             console.log(`[QQ-political] check start group=${groupId} user=${userId} len=${text.length} model=${config.politicalModerationModel || "(main)"}`);

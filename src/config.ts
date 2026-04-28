@@ -137,6 +137,7 @@ export const QQConfigSchema = z.object({
   politicalModeration: BooleanInputSchema(false).describe("政治言论审核开关。开启后每条群消息先经过独立模型检测政治言论，命中时自动撤回消息并可选说明原因。"),
   politicalModerationCooldownMs: NumberInputSchema(60000).describe("政治言论审核原因消息冷却时间（毫秒）。同一群在此窗口内只发一次原因，其余仅撤回。默认 60000（1 分钟）。"),
   politicalModerationModel: IdListStringSchema.describe("政治言论审核模型 (provider/model)，如 bailian/qwen-turbo。留空则使用主模型。"),
+  politicalModerationTimeoutMs: NumberInputSchema(5000).describe("政治言论审核 API 请求超时时间（毫秒）。默认 5000；设为 10000 即允许模型响应 10 秒，超时消息正常通过。"),
   debugPoliticalModeration: BooleanInputSchema(false).describe("政治言论审核调试日志开关。开启后输出详细请求、响应和解析日志，方便排查问题。"),
 }).passthrough();
 
