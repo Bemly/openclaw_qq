@@ -54,14 +54,17 @@ Both the CLI and gateway perform a "suspicious ownership" check on the extension
 git add <changed files>
 git commit -m "..." && git push origin main
 
-# 2. Push source files to NAS (requires sshpass, password in external memory)
+# 2. Push source files to NAS (requires sshpass)
 sshpass -p '<pw>' scp src/<changed1> src/<changed2> ... fnOS:'/vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/src/'
 
-# 3. Ensure ownership is trim.openclaw so gateway can load the plugin
+# 3. Compile TS → JS on NAS (tsc with type errors is ok, JS still emits)
+sshpass -p '<pw>' ssh fnOS 'export PATH="/vol1/@appcenter/nodejs_v22/bin:$PATH" && cd /vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq && npx tsc'
+
+# 4. Fix ownership
 sshpass -p '<pw>' ssh fnOS 'chown -R trim.openclaw:trim.openclaw /vol1/@apphome/trim.openclaw/data/home/.openclaw/extensions/qq/'
 ```
 
-**4. Restart via NAS web UI** — the CLI cannot restart the gateway due to the ownership conflict. Go to 飞牛 NAS web interface → 套件中心 (app center) → stop then start `trim.openclaw`.
+**5. Restart via NAS web UI** — the CLI cannot restart the gateway due to the ownership conflict. Go to 飞牛 NAS web interface → 套件中心 (app center) → stop then start `trim.openclaw`.
 
 To verify: use the NAS web UI's OpenClaw monitor, or run:
 ```bash
