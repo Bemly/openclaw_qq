@@ -5,8 +5,8 @@
   ],
   "channelConfigs": {
     "qq": {
-      "title": "QQ (OneBot) 配置",
-      "description": "配置 QQ OneBot 连接、机器人行为和高级功能"
+      "label": "QQ (OneBot)",
+      "description": "QQ OneBot 11 通道，支持群聊、私聊、图片、语音等功能"
     }
   },
   "configSchema": {
