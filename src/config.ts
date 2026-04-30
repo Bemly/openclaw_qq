@@ -140,6 +140,8 @@ export const QQConfigSchema = z.object({
   politicalModerationModel: IdListStringSchema.describe("政治言论审核模型 (provider/model)，如 bailian/qwen-turbo。留空则使用主模型。"),
   politicalModerationTimeoutMs: NumberInputSchema(5000).describe("政治言论审核 API 请求超时时间（毫秒）。默认 5000；设为 10000 即允许模型响应 10 秒，超时消息正常通过。"),
   debugPoliticalModeration: BooleanInputSchema(false).describe("政治言论审核调试日志开关。开启后输出详细请求、响应和解析日志，方便排查问题。"),
+  primaryModel: IdListStringSchema.describe("主模型 (provider/model)。留空则使用模型列表第一个。失败后按回退策略自动切换到其他模型。"),
+  fallbackModels: IdListStringSchema.describe("回退模型列表（逗号分隔，如 bailian/qwen-turbo, deepsleep/deepseek-chat）。失败后严格按此顺序回退；列表外的模型随机回退。留空则全部随机。"),
 }).passthrough();
 
 export type QQConfig = z.infer<typeof QQConfigSchema>;

@@ -1288,11 +1288,11 @@ function parseImageGenResponse(
     throw new Error(`无法解析生图响应: ${JSON.stringify(data)}`);
 }
 
-function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig): OpenClawConfig {
+function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig, activeModel?: string, allModels?: string[]): OpenClawConfig {
     const blockStreaming = config.blockStreaming ?? true;
     const blockStreamingBreak = config.blockStreamingBreak ?? "message_end";
 
-    return {
+    const result: OpenClawConfig = {
         ...cfg,
         agents: {
             ...cfg.agents,
@@ -1310,6 +1310,18 @@ function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig): OpenClawConf
             },
         },
     };
+
+    // 模型优先级排序：activeModel 排最前，其余保持不变
+    if (activeModel && allModels && allModels.length > 0) {
+        const ordered: Record<string, {}> = {};
+        ordered[activeModel] = {};
+        for (const m of allModels) {
+            if (m !== activeModel) ordered[m] = {};
+        }
+        result.agents!.defaults!.models = ordered;
+    }
+
+    return result;
 }
 
 function buildModelProbeUrls(rawBaseUrl: string): string[] {
@@ -4604,9 +4616,25 @@ ${current}
                                 normalizeModelConfig(matchedAgentConfig?.model || matchedAgentConfig?.models) ||
                                 normalizeModelConfig((cfg as any).agents?.defaults?.model || (cfg as any).agents?.defaults?.models) ||
                                 { primary: "", fallbacks: [] as string[] };
-                            const fallbacks = rawModelConfig.fallbacks;
 
-                            const modelsToTry = [null, ...fallbacks];
+                            // ── QQ config 模型回退队列 ──────────────────────
+                            const allModelKeys = Object.keys((cfg as any)?.agents?.defaults?.models || {});
+                            const qqPrimary = config.primaryModel?.trim() || rawModelConfig.primary || allModelKeys[0] || "";
+                            const configuredFallbackList = (config.fallbackModels || "")
+                                .split(",").map(s => s.trim()).filter(s => s && allModelKeys.includes(s) && s !== qqPrimary);
+                            const remainingModels = allModelKeys.filter(m => m !== qqPrimary && !configuredFallbackList.includes(m));
+                            // Fisher-Yates 随机打乱剩余模型
+                            for (let i = remainingModels.length - 1; i > 0; i--) {
+                                const j = Math.floor(Math.random() * (i + 1));
+                                [remainingModels[i], remainingModels[j]] = [remainingModels[j], remainingModels[i]];
+                            }
+                            const qqFallbacks = [...configuredFallbackList, ...remainingModels];
+                            const modelPoolSize = 1 + qqFallbacks.length;
+                            console.log(`[QQ-model] primary=${qqPrimary} explicitFallbacks=[${configuredFallbackList}] randomFallbacks=[${remainingModels}] totalPool=${modelPoolSize}`);
+                            // ── END 模型回退队列 ──────────────────────────
+
+                            const fallbacks = qqFallbacks.length > 0 ? qqFallbacks : rawModelConfig.fallbacks;
+                            const modelsToTry = [qqPrimary || null, ...fallbacks];
                             let globalDispatchError: any = null;
 
                             out_loop:
@@ -4625,8 +4653,11 @@ ${current}
                                     break out_loop;
                                 }
 
+                                if (modelIndex === 0) {
+                                    console.log(`[QQ-model] attempting ${modelToTest} (1/${modelsToTry.length})`);
+                                }
                                 if (modelIndex > 0) {
-                                    console.log(`[QQ] Failover triggered: Switching to fallback model ${modelToTest}`);
+                                    console.log(`[QQ-model] failover to ${modelToTest} (${modelIndex + 1}/${modelsToTry.length})`);
                                     if (config.enableErrorNotify !== false) {
                                         const notifyMsg = `⏳ 当前服务无响应，正尝试切换至备用线路 ${modelIndex}/${fallbacks.length}...`;
                                         if (isGroup) client.sendGroupMsg(groupId, notifyMsg);
@@ -4736,6 +4767,7 @@ ${current}
 
                                         if (tryCount === maxRetries) {
                                                 if (modelIndex === modelsToTry.length - 1 && !runState.isStale()) {
+                                                    console.log(`[QQ-model] all ${modelsToTry.length} models exhausted`);
                                                     if (globalDispatchError) {
                                                         const errMessage = (globalDispatchError instanceof Error) ? globalDispatchError.message : String(globalDispatchError);
                                                         const notifyMsg = errMessage.trim() ? `⚠️ 服务调用失败: ${errMessage}` : "⚠️ 服务调用失败，无具体错误信息，请稍后重试。";
