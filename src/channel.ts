@@ -4666,17 +4666,18 @@ ${current}
                                     }
                                 }
 
+                                const remainingModels = modelsToTry.slice(modelIndex + 1).filter(Boolean) as string[];
                                 currentCfg = {
                                     ...(cfg as any),
                                     agents: {
                                         ...((cfg as any).agents || {}),
                                         defaults: {
                                             ...((cfg as any).agents?.defaults || {}),
-                                            model: { primary: modelToTest, fallbacks: [] }
+                                            model: { primary: modelToTest, fallbacks: remainingModels }
                                         },
                                         list: ((cfg as any).agents?.list || []).map((a: any) => {
                                             if (a.id === matchedAgentId) {
-                                                return { ...a, model: { primary: modelToTest, fallbacks: [] } };
+                                                return { ...a, model: { primary: modelToTest, fallbacks: remainingModels } };
                                             }
                                             return a;
                                         })
