@@ -3956,7 +3956,7 @@ ${current}
                             .trim();
                         const genKwList = config.imageGenKeywords.split(",").map(k => k.trim()).filter(k => k);
                         for (const kw of genKwList) {
-                            if (genCleaned.startsWith(kw)) {
+                            if (genCleaned.includes(kw)) {
                                 isTriggered = true;
                                 break;
                             }
