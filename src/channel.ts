@@ -3981,6 +3981,7 @@ ${current}
                     const checkMention = isGroup || isGuild;
                     if (!isTriggered && checkMention && config.proactiveReplyProbability > 0 && Math.random() < config.proactiveReplyProbability) {
                         isTriggered = true;
+                        console.log(`[QQ-proactive] random hit prob=${config.proactiveReplyProbability} user=${userId} group=${groupId || "-"} msg="${text.slice(0, 80)}"`);
                     }
                     if (keywordOnlyTrigger && !isTriggered) return;
                     if (checkMention && config.requireMention && !keywordOnlyTrigger && !isTriggered) {
@@ -4471,6 +4472,8 @@ ${current}
                         const prob = config.proactiveReplyProbability ?? 0;
                         if (prob <= 0 || Math.random() >= prob) {
                             skipVisionByProactive = true;
+                        } else {
+                            console.log(`[QQ-vision-proactive] random hit prob=${prob} user=${userId} group=${groupId || "-"}`);
                         }
                     }
                     if (visionModelRaw && cachedInboundImages.entries.some(e => e.path) && !skipVisionByProactive) {
