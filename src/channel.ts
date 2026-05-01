@@ -3979,9 +3979,14 @@ ${current}
                     let mentionedByReply = false;
 
                     const checkMention = isGroup || isGuild;
-                    if (!isTriggered && checkMention && config.proactiveReplyProbability > 0 && Math.random() < config.proactiveReplyProbability) {
-                        isTriggered = true;
-                        console.log(`[QQ-proactive] random hit prob=${config.proactiveReplyProbability} user=${userId} group=${groupId || "-"} msg="${text.slice(0, 80)}"`);
+                    if (!isTriggered && checkMention && config.proactiveReplyProbability > 0) {
+                        const roll = Math.random();
+                        if (roll < config.proactiveReplyProbability) {
+                            isTriggered = true;
+                            console.log(`[QQ-proactive] HIT roll=${roll.toFixed(4)} prob=${config.proactiveReplyProbability} user=${userId} group=${groupId || "-"} msg="${text.slice(0, 80)}"`);
+                        } else {
+                            console.log(`[QQ-proactive] MISS roll=${roll.toFixed(4)} prob=${config.proactiveReplyProbability} user=${userId} group=${groupId || "-"} msg="${text.slice(0, 80)}"`);
+                        }
                     }
                     if (keywordOnlyTrigger && !isTriggered) return;
                     if (checkMention && config.requireMention && !keywordOnlyTrigger && !isTriggered) {
