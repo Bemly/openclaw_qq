@@ -4712,8 +4712,12 @@ ${current}
                     };
 
                     const deliver = async (payload: any, info?: { kind?: string }) => {
-                        if (currentRunState?.isStale()) return;
                         deliverCallCount++;
+                        console.log(`[QQ-deliver] CALL #${deliverCallCount} kind=${info?.kind || "-"} hasText=${Boolean(payload.text)} isError=${Boolean(payload.isError)}`);
+                        if (currentRunState?.isStale()) {
+                            console.log(`[QQ-deliver] SKIP stale currentRunState`);
+                            return;
+                        }
                         const isTextFailure = payload.text && (
                             payload.text.includes("Agent failed before reply:") ||
                             payload.text.includes("Context overflow") ||
