@@ -1463,8 +1463,7 @@ function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig, activeModel?:
             ...cfg.agents,
             defaults: {
                 ...cfg.agents?.defaults,
-                blockStreamingDefault: blockStreaming ? "on" : "off",
-                blockStreamingBreak,
+                ...(blockStreaming ? { blockStreamingDefault: "on", blockStreamingBreak } : {}),
             },
         },
         channels: {
