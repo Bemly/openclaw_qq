@@ -55,7 +55,7 @@ type InboundMediaEntry = {
 };
 
 type QQInboundAttachmentHint = {
-    kind: "file" | "audio" | "video";
+    kind: "file" | "audio";
     name: string;
     url?: string;
     localPath?: string;
@@ -65,34 +65,11 @@ type QQInboundAttachmentHint = {
     mimeType?: string;
 };
 
-type QQOutboundMediaItem = {
-    url: string;
-    name?: string;
-};
-
-type QQOutboundMediaAccess = {
-    workspaceDir?: string;
-    readFile?: (filePath: string) => Promise<Buffer>;
-};
-
-type QQOutboundMediaOptions = {
-    mediaAccess?: QQOutboundMediaAccess;
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
-    mediaLocalRoots?: readonly string[] | "any";
-    fileNameHint?: string;
-    forceDocument?: boolean;
-    audioAsVoice?: boolean;
-};
-
 type QQSetupInput = ChannelSetupInput & {
     wsUrl?: string;
 };
 
 const sessionQueues = new Map<string, SessionQueue>();
-
-let lastImageGenTimestamp = 0;
-
-const politicalModerationCooldown = new Map<string, number>();
 
 async function drainSessionQueue(sessionKey: string, config: QQConfig, sendMessageFn: (msg: string) => void) {
     const q = sessionQueues.get(sessionKey);
@@ -185,7 +162,6 @@ const execFile = promisify(execFileCallback);
 const QQ_INBOUND_MEDIA_DIR = path.join(process.env.HOME || homedir(), ".openclaw", "media", "inbound", "qq");
 const QQ_INBOUND_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const QQ_INBOUND_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
-const QQ_INBOUND_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
 const QQ_INBOUND_MEDIA_FETCH_TIMEOUT_MS = 15000;
 const DEFAULT_QQ_IMAGE_MIME = "image/jpeg";
 const DEFAULT_QQ_BINARY_MIME = "application/octet-stream";
@@ -222,14 +198,6 @@ const GENERIC_EXT_TO_MIME = new Map<string, string>([
     [".oga", "audio/ogg"],
     [".flac", "audio/flac"],
     [".aac", "audio/aac"],
-    [".mp4", "video/mp4"],
-    [".m4v", "video/mp4"],
-    [".mov", "video/quicktime"],
-    [".mkv", "video/x-matroska"],
-    [".webm", "video/webm"],
-    [".avi", "video/x-msvideo"],
-    [".flv", "video/x-flv"],
-    [".3gp", "video/3gpp"],
     [".pdf", "application/pdf"],
     [".txt", "text/plain"],
     [".md", "text/markdown"],
@@ -253,13 +221,6 @@ const GENERIC_MIME_TO_EXT = new Map<string, string>([
     ["audio/ogg", ".ogg"],
     ["audio/flac", ".flac"],
     ["audio/aac", ".aac"],
-    ["video/mp4", ".mp4"],
-    ["video/quicktime", ".mov"],
-    ["video/x-matroska", ".mkv"],
-    ["video/webm", ".webm"],
-    ["video/x-msvideo", ".avi"],
-    ["video/x-flv", ".flv"],
-    ["video/3gpp", ".3gp"],
     ["application/pdf", ".pdf"],
     ["text/plain", ".txt"],
     ["text/markdown", ".md"],
@@ -734,103 +695,6 @@ function buildInboundMediaPayloadFromEntries(entries: InboundMediaEntry[]): Reco
     };
 }
 
-function parseOneBotFileSize(value: unknown): number | undefined {
-    if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
-    if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number.parseInt(value.trim(), 10);
-    return undefined;
-}
-
-function attachmentHintToInboundMediaEntry(hint: QQInboundAttachmentHint): InboundMediaEntry | null {
-    const url = hint.url?.trim();
-    const pathValue = hint.localPath?.trim();
-    if (!url && !pathValue) return null;
-    return {
-        ...(url ? { url } : {}),
-        ...(pathValue ? { path: pathValue } : {}),
-        type: hint.mimeType || inferGenericMimeType(hint.name) || DEFAULT_QQ_BINARY_MIME,
-    };
-}
-
-function collectAttachmentMediaEntries(hints: QQInboundAttachmentHint[], opts?: { includeFiles?: boolean }): InboundMediaEntry[] {
-    const entries: InboundMediaEntry[] = [];
-    for (const hint of hints) {
-        // Generic QQ files (txt/pdf/zip/etc.) must stay metadata-only in Body.
-        // If we put their local path into MediaPath, OpenClaw's runtime may auto-read
-        // text-like files into the model context, which lets arbitrary file contents
-        // pollute instructions. Users can still ask us to read local_path explicitly.
-        if (hint.kind === "file" && opts?.includeFiles !== true) continue;
-        const entry = attachmentHintToInboundMediaEntry(hint);
-        if (entry) entries.push(entry);
-    }
-    return entries;
-}
-
-function rememberAttachmentHint(hints: QQInboundAttachmentHint[], hint: QQInboundAttachmentHint | null | undefined): void {
-    if (!hint) return;
-    const nextKey = `${hint.kind}|${hint.localPath || hint.url || hint.fileId || hint.name}`;
-    if (hints.some((item) => `${item.kind}|${item.localPath || item.url || item.fileId || item.name}` === nextKey)) return;
-    hints.push(hint);
-}
-
-function unwrapOneBotActionData(info: any): any {
-    if (info && typeof info === "object" && info.data && typeof info.data === "object") return info.data;
-    return info;
-}
-
-async function resolveOneBotFileUrl(
-    client: OneBotClient,
-    segment: any,
-    opts?: { groupId?: number; userId?: number }
-): Promise<string | undefined> {
-    if (!segment || String(segment?.type || "").toLowerCase() !== "file") return undefined;
-
-    const existing = normalizeOneBotMediaUrlCandidate(segment?.data?.url)
-        ?? normalizeOneBotMediaUrlCandidate(segment?.data?.file);
-    if (existing && /^https?:\/\//i.test(existing)) {
-        if (!segment.data?.url) segment.data.url = existing;
-        return existing;
-    }
-
-    const fileIdCandidate = segment?.data?.file_id ?? segment?.data?.fileUuid ?? segment?.data?.file_uuid;
-    const fileId = fileIdCandidate !== undefined && fileIdCandidate !== null ? String(fileIdCandidate).trim() : "";
-    if (!fileId) return existing;
-
-    if (opts?.groupId !== undefined) {
-        try {
-            const info = unwrapOneBotActionData(await (client as any).sendWithResponse("get_group_file_url", {
-                group_id: opts.groupId,
-                file_id: fileId,
-                ...(segment.data?.busid !== undefined ? { busid: segment.data.busid } : {}),
-            }));
-            const resolved = normalizeOneBotMediaUrlCandidate(info?.url) ?? normalizeOneBotMediaUrlCandidate(info?.file);
-            if (resolved) {
-                segment.data.url = resolved;
-                if (!segment.data.name && (info?.file_name || info?.name)) segment.data.name = info.file_name || info.name;
-                return resolved;
-            }
-        } catch (err) {
-            console.warn(`[QQ] Failed to resolve group file URL: ${String(err)}`);
-        }
-    }
-
-    try {
-        const info = unwrapOneBotActionData(await (client as any).sendWithResponse("get_private_file_url", {
-            file_id: fileId,
-            ...(opts?.userId !== undefined ? { user_id: opts.userId } : {}),
-        }));
-        const resolved = normalizeOneBotMediaUrlCandidate(info?.url) ?? normalizeOneBotMediaUrlCandidate(info?.file);
-        if (resolved) {
-            segment.data.url = resolved;
-            if (!segment.data.name && (info?.file_name || info?.name)) segment.data.name = info.file_name || info.name;
-            return resolved;
-        }
-    } catch (err) {
-        console.warn(`[QQ] Failed to resolve private file URL: ${String(err)}`);
-    }
-
-    return existing;
-}
-
 async function resolveOneBotImageUrl(client: OneBotClient, segment: any): Promise<string | undefined> {
     if (!segment || String(segment?.type || "").toLowerCase() !== "image") return undefined;
 
@@ -861,7 +725,7 @@ async function resolveOneBotImageUrl(client: OneBotClient, segment: any): Promis
 async function hydrateOneBotMessageMedia(
     client: OneBotClient,
     message: OneBotMessage | string | undefined,
-    opts?: { groupId?: number; userId?: number }
+    opts?: { groupId?: number }
 ): Promise<void> {
     if (!Array.isArray(message)) return;
 
@@ -871,14 +735,16 @@ async function hydrateOneBotMessageMedia(
             await resolveOneBotImageUrl(client, segment);
             continue;
         }
-        if (segType === "video" && !segment?.data?.url) {
-            const resolved = normalizeOneBotMediaUrlCandidate(segment?.data?.file)
-                ?? normalizeOneBotMediaUrlCandidate(segment?.data?.path);
-            if (resolved) segment.data.url = resolved;
-            continue;
-        }
-        if (segType === "file" && !segment?.data?.url) {
-            await resolveOneBotFileUrl(client, segment, opts);
+        if (segType === "file" && opts?.groupId !== undefined && !segment?.data?.url && segment?.data?.file_id) {
+            try {
+                const info = await (client as any).sendWithResponse("get_group_file_url", {
+                    group_id: opts.groupId,
+                    file_id: segment.data.file_id,
+                    busid: segment.data.busid,
+                });
+                const resolved = normalizeOneBotMediaUrlCandidate(info?.url) ?? normalizeOneBotMediaUrlCandidate(info?.file);
+                if (resolved) segment.data.url = resolved;
+            } catch { }
         }
     }
 }
@@ -886,17 +752,32 @@ async function hydrateOneBotMessageMedia(
 async function collectFileHintFromOneBotSegment(
     client: OneBotClient,
     segment: any,
-    opts?: { groupId?: number; userId?: number }
+    opts?: { groupId?: number }
 ): Promise<QQInboundAttachmentHint | null> {
     if (!segment || String(segment?.type || "").toLowerCase() !== "file") return null;
 
-    if (!segment.data?.url) await resolveOneBotFileUrl(client, segment, opts);
+    if (!segment.data?.url && opts?.groupId !== undefined && segment.data?.file_id) {
+        try {
+            const info = await (client as any).sendWithResponse("get_group_file_url", {
+                group_id: opts.groupId,
+                file_id: segment.data.file_id,
+                busid: segment.data.busid,
+            });
+            const resolved = normalizeOneBotMediaUrlCandidate(info?.url) ?? normalizeOneBotMediaUrlCandidate(info?.file);
+            if (resolved) segment.data.url = resolved;
+        } catch { }
+    }
 
-    const fileName = segment.data?.name || segment.data?.file_name || segment.data?.file || "未命名";
+    const fileName = segment.data?.name || segment.data?.file || "未命名";
     const fileId = segment.data?.file_id ? String(segment.data.file_id) : undefined;
     const busid = segment.data?.busid !== undefined ? String(segment.data.busid) : undefined;
     const fileUrl = typeof segment.data?.url === "string" ? segment.data.url : undefined;
-    const parsedSize = parseOneBotFileSize(segment.data?.file_size);
+    const rawSize = segment.data?.file_size;
+    const parsedSize = typeof rawSize === "number"
+        ? rawSize
+        : typeof rawSize === "string" && /^\d+$/.test(rawSize)
+            ? Number.parseInt(rawSize, 10)
+            : undefined;
     let mimeType = inferGenericMimeType(fileName) ?? DEFAULT_QQ_BINARY_MIME;
     let localPath: string | undefined;
     if (fileUrl) {
@@ -923,50 +804,6 @@ async function collectFileHintFromOneBotSegment(
     };
 }
 
-async function collectVideoHintFromOneBotSegment(segment: any): Promise<QQInboundAttachmentHint | null> {
-    if (!segment || String(segment?.type || "").toLowerCase() !== "video") return null;
-
-    const candidates = [
-        normalizeOneBotMediaUrlCandidate(segment.data?.url),
-        normalizeOneBotMediaUrlCandidate(segment.data?.file),
-        normalizeOneBotMediaUrlCandidate(segment.data?.path),
-    ].filter((value): value is string => Boolean(value));
-    const videoUrl = candidates.find((value) => /^https?:\/\//i.test(value) || /^base64:\/\//i.test(value) || /^file:\/\//i.test(value));
-    const fileName = guessFileName(
-        typeof segment.data?.name === "string"
-            ? segment.data.name
-            : typeof segment.data?.file === "string"
-                ? segment.data.file
-                : typeof segment.data?.path === "string"
-                    ? segment.data.path
-                    : videoUrl || "video.mp4"
-    );
-    const parsedSize = parseOneBotFileSize(segment.data?.file_size);
-    let mimeType = inferGenericMimeType(fileName) ?? inferGenericMimeType(videoUrl) ?? "video/mp4";
-    let localPath: string | undefined;
-
-    if (videoUrl) {
-        try {
-            const cached = await cacheInboundAttachmentLocally(videoUrl, { fileName, mimeType }, QQ_INBOUND_VIDEO_MAX_BYTES);
-            if (cached?.path) {
-                localPath = cached.path;
-                mimeType = cached.mimeType || mimeType;
-            }
-        } catch (err) {
-            console.warn(`[QQ] Failed to cache inbound video: ${String(err)}`);
-        }
-    }
-
-    return {
-        kind: "video",
-        name: fileName,
-        ...(videoUrl ? { url: videoUrl } : {}),
-        ...(localPath ? { localPath } : {}),
-        ...(parsedSize !== undefined ? { size: parsedSize } : {}),
-        ...(mimeType ? { mimeType } : {}),
-    };
-}
-
 async function collectAudioHintFromOneBotSegment(segment: any): Promise<QQInboundAttachmentHint | null> {
     if (!segment || String(segment?.type || "").toLowerCase() !== "record") return null;
 
@@ -983,7 +820,12 @@ async function collectAudioHintFromOneBotSegment(segment: any): Promise<QQInboun
                 ? segment.data.path
                 : audioUrl || "voice.amr"
     );
-    const parsedSize = parseOneBotFileSize(segment.data?.file_size);
+    const rawSize = segment.data?.file_size;
+    const parsedSize = typeof rawSize === "number"
+        ? rawSize
+        : typeof rawSize === "string" && /^\d+$/.test(rawSize)
+            ? Number.parseInt(rawSize, 10)
+            : undefined;
     let mimeType = inferGenericMimeType(fileName) ?? "audio/amr";
     let localPath: string | undefined;
     if (audioUrl) {
@@ -1033,17 +875,6 @@ function cleanCQCodes(text: string | undefined): string {
     result = result.replace(/\[CQ:[^\]]+\]/g, (match) => {
         if (match.startsWith("[CQ:image")) {
             return "[图片]";
-        }
-        if (match.startsWith("[CQ:video")) {
-            return "[视频]";
-        }
-        if (match.startsWith("[CQ:record")) {
-            return "[语音]";
-        }
-        if (match.startsWith("[CQ:file")) {
-            const nameMatch = match.match(/(?:^|,)(?:name|file)=([^,\]]+)/);
-            const name = nameMatch?.[1] ? nameMatch[1].replace(/&amp;/g, "&") : "文件";
-            return `[文件:${name}]`;
         }
         return "";
     });
@@ -1109,355 +940,11 @@ async function grokDrawDirect(prompt: string): Promise<{ ok: true; url: string }
     }
 }
 
-interface ImageGenMatch {
-    prompt: string;
-    quality?: string;
-    size?: string;
-    style?: string;
-}
-
-function detectImageGenRequest(text: string, keywords: string): ImageGenMatch | null {
-    if (!text || !keywords) return null;
-
-    const keywordList = keywords.split(",").map(k => k.trim()).filter(k => k);
-    if (keywordList.length === 0) return null;
-
-    // 剥掉开头的 CQ 码（如 [CQ:at,qq=xxx]）和 @username 文本
-    const cleaned = text.trim()
-        .replace(/^\[CQ:[^\]]+\]\s*/, "")
-        .replace(/^@\S+\s*/, "")
-        .trim();
-
-    // 检查是否包含任意关键词（不限是否在开头）
-    let triggeredKeyword: string | null = null;
-    let triggerIndex = -1;
-    for (const keyword of keywordList) {
-        const idx = cleaned.indexOf(keyword);
-        if (idx !== -1) {
-            if (triggerIndex === -1 || idx < triggerIndex) {
-                triggerIndex = idx;
-                triggeredKeyword = keyword;
-            }
-        }
-    }
-
-    if (!triggeredKeyword) return null;
-
-    // 提取 prompt：移除触发关键词和前面的内容
-    let promptPart = cleaned.slice(triggerIndex + triggeredKeyword.length).trim();
-
-    // 清理 -- 参数
-    let quality: string | undefined;
-    let size: string | undefined;
-    let style: string | undefined;
-
-    const paramsMatch = promptPart.match(/--\w+=\S+/g);
-    if (paramsMatch) {
-        for (const param of paramsMatch) {
-            const [key, value] = param.slice(2).split("=");
-            if (key === "quality") quality = value;
-            else if (key === "size") size = value;
-            else if (key === "style") style = value;
-        }
-        promptPart = promptPart.replace(/--\w+=\S+/g, "").trim();
-    }
-
-    // 如果没有通过 --size 指定，扫描全文判断尺寸（优先级：竖 → 横 → 正方形）
-    if (!size) {
-        const fullText = cleaned.toLowerCase();
-
-        // 竖版关键词（按顺序匹配）
-        const portraitKeywords = ["720*1280", "720×1280", "720x1280", "9:16", "竖", "竖版"];
-        for (const kw of portraitKeywords) {
-            if (fullText.includes(kw.toLowerCase())) {
-                size = "720x1280";
-                break;
-            }
-        }
-
-        // 横版关键词（按顺序匹配）
-        if (!size) {
-            const landscapeKeywords = ["1280*720", "1280×720", "1280x720", "16:9", "横", "横版"];
-            for (const kw of landscapeKeywords) {
-                if (fullText.includes(kw.toLowerCase())) {
-                    size = "1280x720";
-                    break;
-                }
-            }
-        }
-
-        // 默认正方形
-        if (!size) {
-            size = "1024x1024";
-        }
-    }
-
-    // 清理 prompt：移除尺寸相关关键词
-    if (promptPart) {
-        const sizeKeywords = ["720*1280", "720×1280", "720x1280", "9:16", "竖", "竖版",
-                             "1280*720", "1280×720", "1280x720", "16:9", "横", "横版"];
-        let cleanedPrompt = promptPart;
-        for (const kw of sizeKeywords) {
-            cleanedPrompt = cleanedPrompt.replace(new RegExp(kw, "gi"), "");
-        }
-        promptPart = cleanedPrompt.trim();
-    }
-
-    if (promptPart) {
-        return { prompt: promptPart, quality, size, style };
-    }
-
-    return null;
-}
-
-interface ImageGenParams {
-    prompt: string;
-    quality?: string;
-    size?: string;
-    style?: string;
-    model: string;
-    endpoint?: string;
-    apiKey?: string;
-    images?: string[]; // 图片 URL 列表，用于图生图
-}
-
-interface ImageGenResult {
-    imageUrl: string;
-}
-
-async function callImageGenerationAPI(
-    params: ImageGenParams,
-    config: QQConfig,
-    providers: Record<string, { baseUrl?: string; apiKey?: string; endpoint?: string }>
-): Promise<ImageGenResult> {
-    const { prompt, model, endpoint, apiKey } = params;
-
-    if (config.imageGenRateLimitMs > 0) {
-        const now = Date.now();
-        const elapsed = now - lastImageGenTimestamp;
-        if (elapsed < config.imageGenRateLimitMs) {
-            const waitTime = config.imageGenRateLimitMs - elapsed;
-            console.log(`[QQ] 生图速率限制: 延迟 ${waitTime}ms`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-        }
-    }
-    lastImageGenTimestamp = Date.now();
-
-    const [provider, modelName] = model.split("/");
-    if (!provider || !modelName) {
-        throw new Error(`无效的模型格式: ${model}`);
-    }
-
-    const providerInfo = providers[provider];
-    if (!providerInfo) {
-        throw new Error(`未配置 provider: ${provider}，请在 OpenClaw 配置中添加 models.providers.${provider}`);
-    }
-
-    const providerType = determineProviderType(provider);
-
-    // 确定最终的 API URL
-    let apiUrl: string;
-    if (endpoint) {
-        apiUrl = endpoint;
-    } else if (provider === "openai") {
-        apiUrl = "https://api.openai.com/v1/images/generations";
-    } else if (providerType === "bailian") {
-        throw new Error(
-            "百炼生图需要配置 imageGenEndpoint，请在 QQ 通道配置中添加: " +
-            "\"imageGenEndpoint\": \"https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation\""
-        );
-    } else {
-        const baseUrl = providerInfo.baseUrl || providerInfo.endpoint || "https://api.example.com/v1";
-        apiUrl = baseUrl.replace(/\/$/, "") + "/images/generations";
-    }
-    const requestApiKey = apiKey || providerInfo.apiKey;
-
-    // 构建 payload
-    const payload = buildImageGenPayload({
-        modelName,
-        prompt,
-        quality: params.quality || config.imageGenQuality || "standard",
-        size: params.size || config.imageGenSize || "1024x1024",
-        style: params.style || config.imageGenStyle || "vivid",
-        providerType,
-        images: params.images, // 传递图片列表
-    });
-
-    const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-    };
-    if (requestApiKey) {
-        headers["Authorization"] = `Bearer ${requestApiKey}`;
-    }
-
-    if (providerType === "bailian") {
-        // 百炼/DashScope 生图 API：支持异步和同步两种模式
-        const isAsync = config.imageGenAsyncMode !== false; // 默认 true=异步
-        if (isAsync) {
-            headers["X-DashScope-Async"] = "enable";
-        }
-
-        const response = await fetch(apiUrl, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(payload),
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`生图 API 失败 (${response.status}): ${errorText}`);
-        }
-
-        const data = await response.json() as any;
-
-        if (isAsync) {
-            // 异步模式：提交任务 → 轮询结果
-            const taskId = data?.output?.task_id;
-            if (!taskId) {
-                throw new Error(`生图任务创建失败，未返回 task_id: ${JSON.stringify(data)}`);
-            }
-            console.log(`[QQ-imagegen] bailian async task_id=${taskId}`);
-
-            // 轮询任务状态
-            const maxAttempts = 30;
-            const pollInterval = 2000;
-            for (let attempt = 0; attempt < maxAttempts; attempt++) {
-                await new Promise(resolve => setTimeout(resolve, pollInterval));
-                const pollBase = new URL(apiUrl).origin;
-                const pollResp = await fetch(`${pollBase}/api/v1/tasks/${taskId}`, {
-                    headers: { "Authorization": `Bearer ${requestApiKey}` },
-                });
-                const pollData = await pollResp.json() as any;
-                const taskStatus = pollData?.output?.task_status;
-                console.log(`[QQ-imagegen] poll attempt=${attempt + 1} status=${taskStatus}`);
-
-                if (taskStatus === "SUCCEEDED") {
-                    const url = pollData?.output?.choices?.[0]?.message?.content?.[0]?.image
-                        || pollData?.output?.results?.[0]?.url;
-                    if (!url) throw new Error(`生图任务完成但无图片 URL: ${JSON.stringify(pollData)}`);
-                    return { imageUrl: url };
-                }
-                if (taskStatus === "FAILED") {
-                    throw new Error(`生图任务失败: ${JSON.stringify(pollData)}`);
-                }
-                // PENDING / RUNNING → 继续轮询
-            }
-            throw new Error(`生图任务超时（${maxAttempts * pollInterval / 1000}s）: task_id=${taskId}`);
-        } else {
-            // 同步模式：直接解析响应（如 Token Plan）
-            console.log(`[QQ-imagegen] bailian sync mode`);
-            return parseImageGenResponse(data, providerType);
-        }
-    }
-
-    // 非百炼（openai / custom）同步 API
-    const response = await fetch(apiUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`生图 API 失败 (${response.status}): ${errorText}`);
-    }
-
-    const data = await response.json();
-    return parseImageGenResponse(data, providerType);
-}
-
-function determineProviderType(
-    provider: string
-): "openai" | "bailian" | "custom" {
-    if (provider === "openai") return "openai";
-    if (provider === "bailian" || provider === "aliyun") return "bailian";
-    return "custom";
-}
-
-function buildImageGenPayload(params: {
-    modelName: string;
-    prompt: string;
-    quality: string;
-    size: string;
-    style: string;
-    providerType: "openai" | "bailian" | "custom";
-    images?: string[];
-}): any {
-    const { modelName, prompt, quality, size, style, providerType, images } = params;
-
-    if (providerType === "openai") {
-        return {
-            model: modelName,
-            prompt,
-            n: 1,
-            quality,
-            size,
-            ...(style && !modelName.includes("dall-e-2") && { style }),
-        };
-    } else if (providerType === "bailian") {
-        // 构建消息内容：图片 + 文本
-        let content: any[] = [];
-        if (images && images.length > 0) {
-            for (const imgUrl of images) {
-                content.push({ image: imgUrl });
-            }
-        }
-        content.push({ text: prompt });
-
-        return {
-            model: modelName,
-            input: {
-                messages: [
-                    {
-                        role: "user",
-                        content,
-                    },
-                ],
-            },
-            parameters: {
-                size: size.replace("x", "*"),
-                n: 1,
-            },
-        };
-    } else {
-        return {
-            model: modelName,
-            prompt,
-            n: 1,
-            size,
-            ...(quality && { quality }),
-            ...(style && { style }),
-        };
-    }
-}
-
-function parseImageGenResponse(
-    data: any,
-    providerType: "openai" | "bailian" | "custom"
-): ImageGenResult {
-    if (providerType === "openai" || providerType === "custom") {
-        if (data.data?.[0]?.url) {
-            return { imageUrl: data.data[0].url };
-        }
-    } else if (providerType === "bailian") {
-        // 支持两种 bailian 格式：
-        // 1. 异步轮询返回：output.results[0].url 或 output.choices[0].message.content[0].image
-        // 2. 同步返回（Token Plan）：output.choices[0].message.content[0].image
-        const url = data.output?.choices?.[0]?.message?.content?.[0]?.image
-            || data.output?.results?.[0]?.url;
-        if (url) {
-            return { imageUrl: url };
-        }
-    }
-
-    throw new Error(`无法解析生图响应: ${JSON.stringify(data)}`);
-}
-
-function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig, activeModel?: string, allModels?: string[]): OpenClawConfig {
+function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig): OpenClawConfig {
     const blockStreaming = config.blockStreaming ?? true;
     const blockStreamingBreak = config.blockStreamingBreak ?? "message_end";
 
-    const result: OpenClawConfig = {
+    return {
         ...cfg,
         agents: {
             ...cfg.agents,
@@ -1475,18 +962,6 @@ function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig, activeModel?:
             },
         },
     };
-
-    // 模型优先级排序：activeModel 排最前，其余保持不变
-    if (activeModel && allModels && allModels.length > 0) {
-        const ordered: Record<string, {}> = {};
-        ordered[activeModel] = {};
-        for (const m of allModels) {
-            if (m !== activeModel) ordered[m] = {};
-        }
-        result.agents!.defaults!.models = ordered;
-    }
-
-    return result;
 }
 
 function buildModelProbeUrls(rawBaseUrl: string): string[] {
@@ -1555,19 +1030,8 @@ async function buildModelCatalogText(enableDynamicLookup: boolean): Promise<stri
     }
 
     const providers = parsed?.models?.providers as Record<string, any> | undefined;
-    const currentModelFromModel = (typeof parsed?.agents?.defaults?.model === "string" && parsed.agents.defaults.model.trim())
-        || (typeof parsed?.agents?.defaults?.model?.primary === "string" && parsed.agents.defaults.model.primary.trim());
-    const currentModelFromModels = (() => {
-        const modelsMap = parsed?.agents?.defaults?.models;
-        if (modelsMap && typeof modelsMap === "object") {
-            const keys = Object.keys(modelsMap).filter(k => k.includes("/"));
-            if (keys.length > 0) return keys[0];
-        }
-        return null;
-    })();
     const currentModel =
-        currentModelFromModel
-        || currentModelFromModels
+        (typeof parsed?.agents?.defaults?.model?.primary === "string" && parsed.agents.defaults.model.primary.trim())
         || (typeof parsed?.agent?.model === "string" && parsed.agent.model.trim())
         || "unknown";
     if (!providers || typeof providers !== "object") {
@@ -1706,7 +1170,7 @@ function summarizeOneBotSegments(message: OneBotMessage | string | undefined, ma
             else if (seg.type === "at") text += ` @${seg.data?.qq || "unknown"} `;
             else if (seg.type === "record") text += ` [语音${seg.data?.text ? `:${seg.data.text}` : ""}]`;
             else if (seg.type === "image") text += " [图片]";
-            else if (seg.type === "video") text += seg.data?.url ? ` [视频:${seg.data.url}]` : " [视频]";
+            else if (seg.type === "video") text += " [视频]";
             else if (seg.type === "json") text += " [卡片]";
             else if (seg.type === "file") {
                 const fileName = seg.data?.name || seg.data?.file || "未命名";
@@ -1716,7 +1180,7 @@ function summarizeOneBotSegments(message: OneBotMessage | string | undefined, ma
                     ...(typeof seg.data?.url === "string" ? { url: seg.data.url } : {}),
                     ...(seg.data?.file_id ? { fileId: String(seg.data.file_id) } : {}),
                     ...(seg.data?.busid !== undefined ? { busid: String(seg.data.busid) } : {}),
-                    ...(parseOneBotFileSize(seg.data?.file_size) !== undefined ? { size: parseOneBotFileSize(seg.data?.file_size)! } : {}),
+                    ...(typeof seg.data?.file_size === "number" ? { size: seg.data.file_size } : {}),
                 });
             } else if (seg.type === "forward" && seg.data?.id) {
                 text += ` [转发:${seg.data.id}]`;
@@ -2565,46 +2029,30 @@ function getClientForAccount(accountId: string | undefined | null) {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function isImageFile(url: string): boolean {
-    const lower = (toLocalPathIfAny(url) || url).split("?")[0].split("#")[0].toLowerCase();
-    const mime = inferGenericMimeType(url);
-    if (mime?.startsWith("image/")) return true;
+    const lower = url.toLowerCase();
     return lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.gif') || lower.endsWith('.webp');
 }
 
 function isAudioFile(url: string): boolean {
-    const lower = (toLocalPathIfAny(url) || url).split("?")[0].split("#")[0].toLowerCase();
-    const mime = inferGenericMimeType(url);
-    if (mime?.startsWith("audio/")) return true;
+    const lower = url.toLowerCase();
     return lower.endsWith('.wav') || lower.endsWith('.mp3') || lower.endsWith('.m4a') || lower.endsWith('.ogg') || lower.endsWith('.flac') || lower.endsWith('.aac');
 }
 
 function isVideoFile(url: string): boolean {
-    const lower = (toLocalPathIfAny(url) || url).split("?")[0].split("#")[0].toLowerCase();
-    const mime = inferGenericMimeType(url);
-    if (mime?.startsWith("video/")) return true;
+    const lower = url.toLowerCase();
     return lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".mkv") || lower.endsWith(".avi") || lower.endsWith(".webm") || lower.endsWith(".m4v");
 }
 
 type MediaKind = "image" | "audio" | "video" | "file";
 
 function detectMediaKind(...values: Array<string | undefined | null>): MediaKind {
-    let sawNonMediaFileExtension = false;
     for (const value of values) {
         if (!value) continue;
+        if (value.startsWith("base64://")) return "image";
         if (isImageFile(value)) return "image";
         if (isAudioFile(value)) return "audio";
         if (isVideoFile(value)) return "video";
-        if (/^data:image\//i.test(value)) return "image";
-        if (/^data:audio\//i.test(value)) return "audio";
-        if (/^data:video\//i.test(value)) return "video";
-        if (!/^base64:\/\//i.test(value)) {
-            const local = toLocalPathIfAny(value) || value;
-            const ext = path.extname(local.split("?")[0].split("#")[0]);
-            if (ext) sawNonMediaFileExtension = true;
-        }
     }
-    if (sawNonMediaFileExtension) return "file";
-    if (values.some((value) => typeof value === "string" && value.startsWith("base64://"))) return "image";
     return "file";
 }
 
@@ -2637,24 +2085,10 @@ function parseUserIdFromTarget(to: string): number | null {
 }
 
 function guessFileName(input: string): string {
-    try {
-        if (/^https?:\/\//i.test(input)) {
-            const parsed = new URL(input);
-            const fname = parsed.searchParams.get("fname") || parsed.searchParams.get("filename") || parsed.searchParams.get("name");
-            if (fname && fname.trim()) return path.basename(decodeURIComponent(fname.trim()));
-        }
-    } catch { }
     const local = toLocalPathIfAny(input);
     const name = path.basename(local || input.split("?")[0].split("#")[0]);
     if (!name || name === "." || name === "/") return `media_${Date.now()}.bin`;
     return name;
-}
-
-function sanitizeQQFileName(input: string | undefined | null, fallback = "file.bin"): string {
-    const raw = String(input || "").trim() || fallback;
-    const base = path.basename(raw.replace(/\\/g, "/"));
-    const cleaned = base.replace(/[\u0000-\u001f<>:"|?*]/g, "_").trim();
-    return cleaned || fallback;
 }
 
 async function stageLocalFileForContainer(localPath: string, hostSharedDir: string, containerSharedDir: string): Promise<string | null> {
@@ -2684,43 +2118,6 @@ async function uploadGroupFile(
     } catch (err) {
         return { ok: false, error: String(err) };
     }
-}
-
-async function uploadPrivateFile(
-    client: OneBotClient,
-    userId: number,
-    filePath: string,
-    fileName: string,
-): Promise<{ ok: boolean; data?: any; error?: string }> {
-    try {
-        const data = await (client as any).sendWithResponse("upload_private_file", {
-            user_id: userId,
-            file: filePath,
-            name: fileName,
-        }, 30000);
-        return { ok: true, data };
-    } catch (err) {
-        return { ok: false, error: String(err) };
-    }
-}
-
-async function uploadFileToTarget(
-    client: OneBotClient,
-    to: string,
-    filePath: string,
-    fileName: string,
-): Promise<{ ok: boolean; data?: any; error?: string; transport?: "upload_group_file" | "upload_private_file" }> {
-    const groupId = parseGroupIdFromTarget(to);
-    if (groupId) {
-        const result = await uploadGroupFile(client, groupId, filePath, fileName);
-        return { ...result, transport: "upload_group_file" };
-    }
-    const userId = parseUserIdFromTarget(to);
-    if (userId) {
-        const result = await uploadPrivateFile(client, userId, filePath, fileName);
-        return { ...result, transport: "upload_private_file" };
-    }
-    return { ok: false, error: `File upload unsupported for target: ${to}` };
 }
 
 async function findRecentAudioFallback(preferredExt?: string): Promise<string | null> {
@@ -2754,10 +2151,9 @@ async function findRecentAudioFallback(preferredExt?: string): Promise<string | 
     }
 }
 
-async function readLocalFileAsBase64(localPath: string, readFile?: (filePath: string) => Promise<Buffer>): Promise<string> {
-    const data = readFile ? await readFile(localPath) : await fs.readFile(localPath);
-    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as any);
-    return `base64://${buffer.toString("base64")}`;
+async function readLocalFileAsBase64(localPath: string): Promise<string> {
+    const data = await fs.readFile(localPath);
+    return `base64://${data.toString("base64")}`;
 }
 
 async function ensureFileInSharedMedia(localPath: string, hostSharedDir: string): Promise<string> {
@@ -2769,7 +2165,7 @@ async function ensureFileInSharedMedia(localPath: string, hostSharedDir: string)
     return baseName;
 }
 
-function toLocalPathIfAny(value: string, workspaceDir?: string): string | null {
+function toLocalPathIfAny(value: string): string | null {
     if (!value) return null;
     if (value.startsWith("file:")) {
         try {
@@ -2784,7 +2180,7 @@ function toLocalPathIfAny(value: string, workspaceDir?: string): string | null {
         value.startsWith("../") ||
         /^[A-Za-z]:[\\/]/.test(value)
     ) {
-        return path.isAbsolute(value) ? value : path.resolve(workspaceDir || process.cwd(), value);
+        return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
     }
     return null;
 }
@@ -2803,11 +2199,10 @@ function splitMessage(text: string, limit: number): string[] {
 function resolveOutboundMessageId(...candidates: Array<unknown>): string {
     for (const candidate of candidates) {
         if (candidate && typeof candidate === "object") {
-            const fromAck = (candidate as any).message_id ?? (candidate as any).messageId ?? (candidate as any).file_id ?? (candidate as any).fileId;
+            const fromAck = (candidate as any).message_id ?? (candidate as any).messageId;
             if (fromAck !== undefined && fromAck !== null && String(fromAck).trim()) {
                 return String(fromAck).trim();
             }
-            continue;
         }
         if (candidate !== undefined && candidate !== null && String(candidate).trim()) {
             return String(candidate).trim();
@@ -2977,18 +2372,18 @@ function processAntiRisk(text: string): string {
     return text.replace(/(https?:\/\/)/gi, "$1 ");
 }
 
-async function resolveMediaUrl(url: string, opts?: { workspaceDir?: string; readFile?: (filePath: string) => Promise<Buffer> }): Promise<string> {
+async function resolveMediaUrl(url: string): Promise<string> {
     if (url.startsWith("file:")) {
         try {
             const localPath = fileURLToPath(url);
-            return await readLocalFileAsBase64(localPath, opts?.readFile);
+            return await readLocalFileAsBase64(localPath);
         } catch (e) {
             const preferredExt = path.extname(url);
             const fallback = await findRecentAudioFallback(preferredExt);
             if (fallback) {
                 try {
                     console.warn(`[QQ] Local media missing, fallback to recent audio: ${fallback}`);
-                    return await readLocalFileAsBase64(fallback, opts?.readFile);
+                    return await readLocalFileAsBase64(fallback);
                 } catch { }
             }
             console.warn(`[QQ] Failed to convert local file to base64: ${e}`);
@@ -3003,8 +2398,8 @@ async function resolveMediaUrl(url: string, opts?: { workspaceDir?: string; read
         /^[A-Za-z]:[\\/]/.test(url);
     if (looksLocalPath) {
         try {
-            const absolutePath = path.isAbsolute(url) ? url : path.resolve(opts?.workspaceDir || process.cwd(), url);
-            return await readLocalFileAsBase64(absolutePath, opts?.readFile);
+            const absolutePath = path.isAbsolute(url) ? url : path.resolve(process.cwd(), url);
+            return await readLocalFileAsBase64(absolutePath);
         } catch (e) {
             if (isAudioFile(url)) {
                 const preferredExt = path.extname(url);
@@ -3012,7 +2407,7 @@ async function resolveMediaUrl(url: string, opts?: { workspaceDir?: string; read
                 if (fallback) {
                     try {
                         console.warn(`[QQ] Local audio path unavailable, fallback to ${fallback}`);
-                        return await readLocalFileAsBase64(fallback, opts?.readFile);
+                        return await readLocalFileAsBase64(fallback);
                     } catch { }
                 }
             }
@@ -3066,352 +2461,6 @@ async function sendOneBotMessageWithAck(client: OneBotClient, to: string, messag
     } catch (err) {
         return { ok: false, error: String(err) };
     }
-}
-
-// ── 政治言论审核 ──────────────────────────────────────
-function buildPoliticalEndpoint(baseUrl: string): string {
-    const clean = baseUrl.replace(/\/+$/, "");
-    if (clean.endsWith("/v1") || clean.endsWith("/compatible-mode/v1")) {
-        return `${clean}/chat/completions`;
-    }
-    return `${clean}/v1/chat/completions`;
-}
-
-async function checkPoliticalSpeech(
-    messageText: string,
-    modelConfig: string | undefined,
-    cfg: any,
-    timeoutMs: number = 5000,
-): Promise<{ isPolitical: boolean; reason: string }> {
-    const fetchImpl = (globalThis as any).fetch;
-    if (typeof fetchImpl !== "function") {
-        return { isPolitical: false, reason: "" };
-    }
-
-    let endpoint = "";
-    let model = "";
-    let apiKey = "";
-
-    const rawModel = typeof modelConfig === "string" ? modelConfig.trim() : "";
-    if (rawModel && rawModel.includes("/")) {
-        const [providerId, modelName] = rawModel.split("/", 2);
-        const providers = cfg?.models?.providers || {};
-        const provider = providers[providerId];
-        if (provider?.baseUrl) {
-            endpoint = buildPoliticalEndpoint(provider.baseUrl);
-            apiKey = provider.apiKey || "";
-        }
-        model = modelName;
-    }
-
-    if (!endpoint || !model) {
-        // Fallback: try primary model from agents.defaults (may be string, {primary,fallbacks}, or map)
-        const defaultModel = cfg?.agents?.defaults?.model || cfg?.agents?.defaults?.models;
-        let resolvedDefault: string | undefined;
-        if (typeof defaultModel === "string" && defaultModel.trim()) {
-            resolvedDefault = defaultModel.trim();
-        } else if (defaultModel?.primary) {
-            resolvedDefault = defaultModel.primary;
-        } else if (defaultModel && typeof defaultModel === "object") {
-            const keys = Object.keys(defaultModel).filter((k: string) => k.includes("/"));
-            if (keys.length > 0) resolvedDefault = keys[0];
-        }
-        if (resolvedDefault && resolvedDefault.includes("/")) {
-            const [providerId, modelName] = resolvedDefault.split("/", 2);
-            if (!model) model = modelName;
-            if (!endpoint) {
-                const providers = cfg?.models?.providers || {};
-                const provider = providers[providerId];
-                if (provider?.baseUrl) {
-                    endpoint = buildPoliticalEndpoint(provider.baseUrl);
-                    apiKey = provider.apiKey || "";
-                }
-            }
-        }
-    }
-
-    if (!endpoint || !model) {
-        console.warn(`[QQ-political] no model endpoint configured (explicit="${rawModel}", endpoint="${endpoint}", resolved="${model || "(none)"}")`);
-        return { isPolitical: false, reason: "" };
-    }
-
-    const systemPrompt =
-        "请判断以下用户输入是否包含政治相关言论（包括政治敏感话题、政治人物讨论、政策评论、政治事件等）。\n" +
-        "如果包含政治言论，请直接回复：是，原因：[用一句话简述原因，不超过20字]\n" +
-        "如果不包含政治言论，请只回复：不是\n" +
-        "不要输出任何其他内容。";
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-        const resp = await fetchImpl(endpoint, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-            },
-            body: JSON.stringify({
-                model,
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: `请判断以下内容：\n\n${messageText}` },
-                ],
-                temperature: 0,
-                max_tokens: 64,
-            }),
-            signal: controller.signal,
-        });
-        clearTimeout(timer);
-
-        if (!resp.ok) {
-            const errText = await resp.text().catch(() => "");
-            console.warn(`[QQ-political] HTTP ${resp.status}: ${errText.slice(0, 300)}`);
-            return { isPolitical: false, reason: "" };
-        }
-
-        const data = await resp.json();
-        const content = data?.choices?.[0]?.message?.content?.trim() || "";
-
-        const isPolitical = content.startsWith("是") && !content.startsWith("不是");
-        let reason = isPolitical
-            ? content.replace(/^(是[，,：:\s]*)/, "").trim()
-            : "";
-        // Sanitize meaningless reasons like "原因" or empty
-        if (reason.length <= 2 || reason === "原因" || reason === "无原因") {
-            reason = "检测到政治言论";
-        }
-
-        return { isPolitical, reason };
-    } catch (err) {
-        console.error(`[QQ-political] check failed: ${String(err)}`);
-        return { isPolitical: false, reason: "" };
-    }
-function collectOutboundMediaItemsFromPayload(payload: any): QQOutboundMediaItem[] {
-    const items: QQOutboundMediaItem[] = [];
-    const push = (url: unknown, name?: unknown) => {
-        if (typeof url !== "string") return;
-        const trimmed = url.trim();
-        if (!trimmed) return;
-        items.push({ url: trimmed, ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}) });
-    };
-
-    if (Array.isArray(payload?.mediaUrls)) {
-        for (const url of payload.mediaUrls) push(url);
-    }
-    push(payload?.mediaUrl);
-
-    if (Array.isArray(payload?.files)) {
-        for (const file of payload.files) {
-            if (typeof file === "string") {
-                push(file);
-                continue;
-            }
-            if (!file || typeof file !== "object") continue;
-            push(
-                file.url ?? file.mediaUrl ?? file.localPath ?? file.path ?? file.filePath ?? file.file,
-                file.name ?? file.filename ?? file.fileName,
-            );
-        }
-    }
-
-    const unique: QQOutboundMediaItem[] = [];
-    const seen = new Set<string>();
-    for (const item of items) {
-        const key = `${item.url}|${item.name || ""}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        unique.push(item);
-    }
-    return unique;
-}
-
-function resolveOutboundReadFile(opts?: QQOutboundMediaOptions): ((filePath: string) => Promise<Buffer>) | undefined {
-    return opts?.mediaReadFile || opts?.mediaAccess?.readFile;
-}
-
-function resolveOutboundWorkspaceDir(opts?: QQOutboundMediaOptions): string | undefined {
-    const workspaceDir = opts?.mediaAccess?.workspaceDir;
-    return typeof workspaceDir === "string" && workspaceDir.trim() ? workspaceDir.trim() : undefined;
-}
-
-function getRuntimeCfgForAccount(accountId: string | undefined | null): Partial<QQConfig> {
-    const lookupId = normalizeAccountLookupId(accountId || DEFAULT_ACCOUNT_ID);
-    return (accountConfigs.get(lookupId)
-        || accountConfigs.get(normalizeAccountId(lookupId))
-        || accountConfigs.get(DEFAULT_ACCOUNT_ID)
-        || {}) as Partial<QQConfig>;
-}
-
-async function sendQQTextMessage(params: {
-    client: OneBotClient;
-    to: string;
-    text: string;
-    replyToId?: string | null;
-    delayBetweenChunksMs?: number;
-}): Promise<any> {
-    const normalizedText = await resolveInlineCqRecord(params.text || "");
-    if (!normalizedText.trim()) return null;
-    const chunks = splitMessage(normalizedText, 4000);
-    let lastAck: any = null;
-    for (let i = 0; i < chunks.length; i += 1) {
-        let message: OneBotMessage | string = chunks[i];
-        if (params.replyToId && i === 0) {
-            message = [{ type: "reply", data: { id: String(params.replyToId) } }, { type: "text", data: { text: chunks[i] } }];
-        }
-        const ack = await sendOneBotMessageWithAck(params.client, params.to, message);
-        if (!ack.ok) throw new Error(ack.error || "Failed to send text");
-        lastAck = ack.data;
-        if (chunks.length > 1) await sleep(params.delayBetweenChunksMs ?? 1000);
-    }
-    return lastAck;
-}
-
-async function buildUploadableMediaRef(params: {
-    mediaUrl: string;
-    localSourcePath?: string | null;
-    stagedSharedPath?: string | null;
-    workspaceDir?: string;
-    readFile?: (filePath: string) => Promise<Buffer>;
-}): Promise<string> {
-    if (params.stagedSharedPath) return params.stagedSharedPath;
-    const localPath = params.localSourcePath || toLocalPathIfAny(params.mediaUrl, params.workspaceDir);
-    if (localPath) return readLocalFileAsBase64(localPath, params.readFile);
-    return params.mediaUrl;
-}
-
-async function sendQQMediaMessage(params: {
-    client: OneBotClient;
-    to: string;
-    text?: string;
-    mediaUrl: string;
-    accountId?: string | null;
-    replyToId?: string | null;
-} & QQOutboundMediaOptions): Promise<any> {
-    const mediaUrl = String(params.mediaUrl || "").trim();
-    if (!mediaUrl) {
-        if (params.text?.trim()) {
-            const textAck = await sendQQTextMessage({ client: params.client, to: params.to, text: params.text, replyToId: params.replyToId });
-            return {
-                channel: "qq",
-                messageId: resolveOutboundMessageId(textAck),
-                timestamp: Date.now(),
-                meta: { textSent: Boolean(textAck), mediaSent: false },
-            };
-        }
-        throw new Error("mediaUrl is required");
-    }
-
-    const runtimeCfg = getRuntimeCfgForAccount(params.accountId || DEFAULT_ACCOUNT_ID);
-    const hostSharedDir = typeof runtimeCfg.sharedMediaHostDir === "string" ? runtimeCfg.sharedMediaHostDir.trim() : "";
-    const containerSharedDirRaw = typeof runtimeCfg.sharedMediaContainerDir === "string" ? runtimeCfg.sharedMediaContainerDir.trim() : "";
-    const containerSharedDir = containerSharedDirRaw || "/openclaw_media";
-    const workspaceDir = resolveOutboundWorkspaceDir(params);
-    const readFile = resolveOutboundReadFile(params);
-
-    const localSourcePath = toLocalPathIfAny(mediaUrl, workspaceDir);
-    let stagedSharedPath: string | null = null;
-    if (localSourcePath && hostSharedDir) {
-        stagedSharedPath = await stageLocalFileForContainer(localSourcePath, hostSharedDir, containerSharedDir);
-    }
-
-    const fileName = sanitizeQQFileName(params.fileNameHint || guessFileName(mediaUrl));
-    const sourceKind = params.forceDocument ? "file" : detectMediaKind(params.fileNameHint, mediaUrl);
-
-    let textAck: any = null;
-    if (params.text && params.text.trim()) {
-        textAck = await sendQQTextMessage({ client: params.client, to: params.to, text: params.text, replyToId: params.replyToId });
-    }
-
-    const uploadableFileRef = await buildUploadableMediaRef({
-        mediaUrl,
-        localSourcePath,
-        stagedSharedPath,
-        workspaceDir,
-        readFile,
-    });
-
-    const mediaMessage: OneBotMessage = [];
-    if (params.replyToId && !(params.text && params.text.trim())) mediaMessage.push({ type: "reply", data: { id: String(params.replyToId) } });
-
-    const mediaKind = sourceKind;
-    const audioLike = mediaKind === "audio";
-    const imageLike = mediaKind === "image";
-    const videoLike = mediaKind === "video";
-    const fileLike = mediaKind === "file" || params.forceDocument === true;
-
-    if (audioLike && textAck) {
-        const configuredDelay = Number(runtimeCfg.rateLimitMs ?? 1000);
-        const delayMs = Number.isFinite(configuredDelay) ? Math.max(1200, configuredDelay) : 1200;
-        await sleep(delayMs);
-    }
-
-    if (fileLike) {
-        const uploadAck = await uploadFileToTarget(params.client, params.to, uploadableFileRef, fileName);
-        if (uploadAck.ok) {
-            return {
-                channel: "qq",
-                messageId: resolveOutboundMessageId(uploadAck.data, textAck),
-                timestamp: Date.now(),
-                meta: {
-                    textSent: Boolean(textAck),
-                    mediaSent: true,
-                    transport: uploadAck.transport || "file_segment",
-                    mediaKind: "file",
-                    fileName,
-                },
-            };
-        }
-        console.warn(`[QQ] file upload failed, falling back to file segment: ${uploadAck.error || "unknown"}`);
-        mediaMessage.push({ type: "file", data: { file: uploadableFileRef, name: fileName } });
-    } else if (imageLike) {
-        const imageFile = stagedSharedPath || await resolveMediaUrl(mediaUrl, { workspaceDir, readFile });
-        mediaMessage.push({ type: "image", data: { file: imageFile } });
-    } else if (audioLike) {
-        const recordFile = stagedSharedPath || await resolveMediaUrl(mediaUrl, { workspaceDir, readFile });
-        mediaMessage.push({ type: "record", data: { file: recordFile } });
-    } else if (videoLike) {
-        mediaMessage.push({ type: "video", data: { file: uploadableFileRef } });
-    } else {
-        mediaMessage.push({ type: "file", data: { file: uploadableFileRef, name: fileName } });
-    }
-
-    const mediaAck = await sendOneBotMessageWithAck(params.client, params.to, mediaMessage);
-    if (!mediaAck.ok) {
-        const primaryError = mediaAck.error || "unknown";
-        const errorClass = classifyMediaError(primaryError);
-        const uploadAck = await uploadFileToTarget(params.client, params.to, uploadableFileRef, fileName);
-        if (uploadAck.ok) {
-            return {
-                channel: "qq",
-                messageId: resolveOutboundMessageId(uploadAck.data, textAck),
-                timestamp: Date.now(),
-                meta: {
-                    textSent: Boolean(textAck),
-                    mediaSent: true,
-                    fallbackSent: true,
-                    fallbackType: uploadAck.transport || "upload_file",
-                    mediaKind,
-                    fileName,
-                    errorClass,
-                    note: `Primary media path failed; fallback upload succeeded. reason=${primaryError}`,
-                },
-            };
-        }
-        throw new Error(`Media send failed: ${primaryError} [${errorClass}]`);
-    }
-
-    return {
-        channel: "qq",
-        messageId: resolveOutboundMessageId(mediaAck.data, textAck),
-        timestamp: Date.now(),
-        meta: {
-            textSent: Boolean(textAck),
-            mediaSent: true,
-            mediaKind,
-            fileName,
-        },
-    };
 }
 
 export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
@@ -3487,6 +2536,10 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                 allowBareGroupCommands: {
                     label: "允许群聊裸 slash 指令",
                     help: "默认关闭。关闭后，/model 这类群聊指令需要配合关键词触发；如果想恢复旧体验再手动开启。",
+                },
+                proactiveReplyProbability: {
+                    label: "群聊主动回复概率",
+                    help: "默认 0=关闭。设为 0.05 即 5% 概率随机回复。不受 keywordOnlyTrigger 控制，触发时自动为模型注入主动回复上下文。",
                 },
             },
         };
@@ -3703,8 +2756,6 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
             const blockedUserIds = [...new Set(parseIdListInput(config.blockedUsers as string | number | Array<string | number> | undefined))];
             const blockedNotifyCooldownMs = Math.max(0, Number(config.blockedNotifyCooldownMs ?? 10000));
 
-            const debugPoliticalModeration = config.debugPoliticalModeration === true;
-
             if (!config.wsUrl) throw new Error("QQ: wsUrl is required");
 
             const existingLiveClient = clients.get(account.accountId);
@@ -3863,11 +2914,7 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                                     }
                                 }
                                 resolvedText += ` @${name} `;
-                            } else if (seg.type === "record") {
-                                const audioHint = await collectAudioHintFromOneBotSegment(seg);
-                                rememberAttachmentHint(audioHints, audioHint);
-                                resolvedText += ` [语音消息]${seg.data?.text ? `(${seg.data.text})` : ""}`;
-                            }
+                            } else if (seg.type === "record") resolvedText += ` [语音消息]${seg.data?.text ? `(${seg.data.text})` : ""}`;
                             else if (seg.type === "image") {
                                 const imageUrl = await resolveOneBotImageUrl(client, seg);
                                 if (imageUrl) {
@@ -3881,12 +2928,7 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                                     resolvedText += " [图片]";
                                 }
                             }
-                            else if (seg.type === "video") {
-                                const videoHint = await collectVideoHintFromOneBotSegment(seg);
-                                rememberAttachmentHint(fileHints, videoHint);
-                                if (videoHint?.url) resolvedText += ` [视频: ${videoHint.url}]`;
-                                else resolvedText += " [视频消息]";
-                            }
+                            else if (seg.type === "video") resolvedText += " [视频消息]";
                             else if (seg.type === "json") resolvedText += " [卡片消息]";
                             else if (seg.type === "forward" && seg.data?.id) {
                                 try {
@@ -3899,58 +2941,34 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                                     }
                                 } catch (e) { }
                             } else if (seg.type === "file") {
-                                const fileHint = await collectFileHintFromOneBotSegment(client, seg, { groupId: isGroup ? groupId : undefined, userId });
-                                rememberAttachmentHint(fileHints, fileHint);
-                                const shortHint = fileHint?.url
-                                    ? ` [文件: ${fileHint.name}, 下载=${fileHint.url}]`
-                                    : fileHint?.fileId
-                                        ? ` [文件: ${fileHint.name}, file_id=${fileHint.fileId}${fileHint.busid ? `, busid=${fileHint.busid}` : ""}]`
-                                        : ` [文件: ${fileHint?.name || "未命名"}]`;
+                                if (!seg.data?.url && isGroup) {
+                                    try {
+                                        const info = await (client as any).sendWithResponse("get_group_file_url", { group_id: groupId, file_id: seg.data?.file_id, busid: seg.data?.busid });
+                                        if (info?.url) seg.data.url = info.url;
+                                    } catch (e) { }
+                                }
+                                const fileName = seg.data?.name || seg.data?.file || "未命名";
+                                const fileId = seg.data?.file_id ? String(seg.data.file_id) : undefined;
+                                const busid = seg.data?.busid !== undefined ? String(seg.data.busid) : undefined;
+                                const fileUrl = typeof seg.data?.url === "string" ? seg.data.url : undefined;
+                                const fileSize = typeof seg.data?.file_size === "number" ? seg.data.file_size : undefined;
+                                fileHints.push({
+                                    kind: "file",
+                                    name: fileName,
+                                    ...(fileUrl ? { url: fileUrl } : {}),
+                                    ...(fileId ? { fileId } : {}),
+                                    ...(busid ? { busid } : {}),
+                                    ...(fileSize !== undefined ? { size: fileSize } : {}),
+                                });
+                                const shortHint = fileUrl
+                                    ? ` [文件: ${fileName}, 下载=${fileUrl}]`
+                                    : fileId
+                                        ? ` [文件: ${fileName}, file_id=${fileId}${busid ? `, busid=${busid}` : ""}]`
+                                        : ` [文件: ${fileName}]`;
                                 resolvedText += shortHint;
                             }
                         }
                         if (resolvedText) text = resolvedText;
-                    }
-
-                    // ── 政治言论审核 ──
-                    if (config.politicalModeration === true && isGroup && text.trim()) {
-                        const politicalResult = await checkPoliticalSpeech(
-                            text.trim(),
-                            config.politicalModerationModel as string | undefined,
-                            cfg,
-                            config.politicalModerationTimeoutMs ?? 5000,
-                        );
-                        if (debugPoliticalModeration) {
-                            console.log(`[QQ-political] check start group=${groupId} user=${userId} len=${text.length} model=${config.politicalModerationModel || "(main)"}`);
-                            console.log(`[QQ-political] response: "${politicalResult.reason || politicalResult.isPolitical}" isPolitical=${politicalResult.isPolitical}`);
-                        }
-                        if (politicalResult.isPolitical) {
-                            console.log(`[QQ-political] DETECTED group=${groupId} user=${userId} reason="${politicalResult.reason}"`);
-
-                            if (event.message_id) {
-                                client.deleteMsg(event.message_id);
-                                if (debugPoliticalModeration) {
-                                    console.log(`[QQ-political] deleted message_id=${event.message_id}`);
-                                }
-                            }
-
-                            const groupKey = `${account.accountId}:${groupId}`;
-                            const now = Date.now();
-                            const cooldownMs = config.politicalModerationCooldownMs ?? 60000;
-                            const lastAnnounced = politicalModerationCooldown.get(groupKey) || 0;
-
-                            if (now - lastAnnounced >= cooldownMs) {
-                                politicalModerationCooldown.set(groupKey, now);
-                                client.sendGroupMsg(groupId, `触发撤回：原因是${politicalResult.reason}`);
-                                console.log(`[QQ-political] sent reason to group=${groupId}`);
-                            } else {
-                                if (debugPoliticalModeration) {
-                                    console.log(`[QQ-political] silent delete (cooldown, ${cooldownMs - (now - lastAnnounced)}ms remaining)`);
-                                }
-                            }
-
-                            return;
-                        }
                     }
 
                     if (blockedUserIds.includes(userId)) return;
@@ -4339,7 +3357,6 @@ ${current}
                         try {
                             await hydrateOneBotMessageMedia(client, Array.isArray(repliedMsg.message) ? repliedMsg.message : undefined, {
                                 groupId: repliedMsg?.group_id ?? groupId,
-                                userId: repliedMsg?.user_id ?? userId,
                             });
                             const replyImageHints = extractImageHints(Array.isArray(repliedMsg.message) ? repliedMsg.message : repliedMsg.raw_message, 5);
                             for (const hint of replyImageHints) {
@@ -4348,20 +3365,34 @@ ${current}
                         } catch { }
                     }
 
-                    if (repliedMsg) {
+                    if (fileHints.length === 0 && repliedMsg) {
                         try {
                             const replySegments = Array.isArray(repliedMsg.message) ? repliedMsg.message : [];
                             for (const seg of replySegments) {
-                                if (seg?.type === "file") {
-                                    rememberAttachmentHint(
-                                        fileHints,
-                                        await collectFileHintFromOneBotSegment(client, seg, { groupId: isGroup ? groupId : undefined, userId }),
-                                    );
-                                } else if (seg?.type === "video") {
-                                    rememberAttachmentHint(fileHints, await collectVideoHintFromOneBotSegment(seg));
-                                } else if (seg?.type === "record") {
-                                    rememberAttachmentHint(audioHints, await collectAudioHintFromOneBotSegment(seg));
+                                if (seg?.type !== "file") continue;
+                                if (!seg.data?.url && isGroup && seg.data?.file_id) {
+                                    try {
+                                        const info = await (client as any).sendWithResponse("get_group_file_url", {
+                                            group_id: groupId,
+                                            file_id: seg.data.file_id,
+                                            busid: seg.data.busid,
+                                        });
+                                        if (info?.url) seg.data.url = info.url;
+                                    } catch { }
                                 }
+                                const fileName = seg.data?.name || seg.data?.file || "未命名";
+                                const fileId = seg.data?.file_id ? String(seg.data.file_id) : undefined;
+                                const busid = seg.data?.busid !== undefined ? String(seg.data.busid) : undefined;
+                                const fileUrl = typeof seg.data?.url === "string" ? seg.data.url : undefined;
+                                const fileSize = typeof seg.data?.file_size === "number" ? seg.data.file_size : undefined;
+                                fileHints.push({
+                                    kind: "file",
+                                    name: fileName,
+                                    ...(fileUrl ? { url: fileUrl } : {}),
+                                    ...(fileId ? { fileId } : {}),
+                                    ...(busid ? { busid } : {}),
+                                    ...(fileSize !== undefined ? { size: fileSize } : {}),
+                                });
                             }
 
                             if (fileHints.length === 0 && typeof repliedMsg.raw_message === "string") {
@@ -4398,34 +3429,18 @@ ${current}
                         }
                     }
 
-                    // 生图关键词匹配也视为触发（群聊不@也能直接生效）
-                    if (!isTriggered && config.imageGenKeywords?.trim()) {
-                        const genCleaned = text.trim()
-                            .replace(/^\[CQ:[^\]]+\]\s*/, "")
-                            .replace(/^@\S+\s*/, "")
-                            .trim();
-                        const genKwList = config.imageGenKeywords.split(",").map(k => k.trim()).filter(k => k);
-                        for (const kw of genKwList) {
-                            if (genCleaned.includes(kw)) {
-                                isTriggered = true;
-                                break;
-                            }
-                        }
-                    }
-
                     let mentionedByAt = false;
                     let mentionedByReply = false;
 
-                    const checkMention = isGroup || isGuild;
-                    if (!isTriggered && checkMention && config.proactiveReplyProbability > 0) {
-                        const roll = Math.random();
-                        if (roll < config.proactiveReplyProbability) {
+                    // 主动回复: 概率触发，不受 keywordOnlyTrigger 限制
+                    const proactiveProbability = Number(config.proactiveReplyProbability);
+                    if (isGroup && !isTriggered && proactiveProbability > 0 && proactiveProbability <= 1) {
+                        if (Math.random() < proactiveProbability) {
                             isTriggered = true;
-                            console.log(`[QQ-proactive] HIT roll=${roll.toFixed(4)} prob=${config.proactiveReplyProbability} user=${userId} group=${groupId || "-"} msg="${text.slice(0, 80)}"`);
-                        } else {
-                            console.log(`[QQ-proactive] MISS roll=${roll.toFixed(4)} prob=${config.proactiveReplyProbability} user=${userId} group=${groupId || "-"} msg="${text.slice(0, 80)}"`);
                         }
                     }
+
+                    const checkMention = isGroup || isGuild;
                     if (keywordOnlyTrigger && !isTriggered) return;
                     if (checkMention && config.requireMention && !keywordOnlyTrigger && !isTriggered) {
                         const selfId = client.getSelfId();
@@ -4529,12 +3544,6 @@ ${current}
                     });
 
                     let deliveredAnything = false;
-                    // Track generated visible output separately from delivery completion.
-                    // Unknown block text may be flushed by a short debounce timer; if that
-                    // async flush races with dispatch completion, deliveredAnything can still
-                    // be false even though a real reply is already queued/sending. Do not send
-                    // the empty-reply fallback in that case.
-                    let sawReplyContent = false;
                     let deliverCallCount = 0;
                     let dispatcherError: any = null;
                     let currentRunState: { isStale: () => boolean } | null = null;
@@ -4607,7 +3616,7 @@ ${current}
                         for (let i = 0; i < chunks.length; i++) {
                             if (currentRunState?.isStale()) return i > 0;
                             let chunk = chunks[i];
-                            if (isGroup && i === 0 && config.atSenderInGroupReply) chunk = `[CQ:at,qq=${userId}] ${chunk}`;
+                            if (isGroup && i === 0) chunk = `${chunk}`;
 
                             if (isGroup) client.sendGroupMsg(groupId, chunk);
                             else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunk);
@@ -4731,7 +3740,6 @@ ${current}
                             const processed = await prepareOutgoingText(payload.text);
                             if (currentRunState?.isStale()) return;
                             if (processed.trim()) {
-                                sawReplyContent = true;
                                 const isUnknownBlockText = !phase && info?.kind === "block";
                                 if (isUnknownBlockText) {
                                     const flushedBufferedFinal = await flushBufferedFinalTexts();
@@ -4756,11 +3764,7 @@ ${current}
                                 }
                             }
                         }
-                        const outboundMediaItems = collectOutboundMediaItemsFromPayload(payload);
-                        if (outboundMediaItems.length > 0) {
-                            if (outboundMediaItems.length > 0) {
-                                sawReplyContent = true;
-                            }
+                        if (payload.files) {
                             const flushedUnknownText = await flushBufferedUnknownTexts("before_files");
                             if (flushedUnknownText) deliveredAnything = true;
                             const flushedBufferedText = await flushBufferedFinalTexts();
@@ -4769,20 +3773,30 @@ ${current}
                                 const sentPrefix = await sendSessionSourcePrefixOnly();
                                 if (sentPrefix) deliveredAnything = true;
                             }
-                            for (const f of outboundMediaItems) {
+                            for (const f of payload.files) {
                                 if (currentRunState?.isStale()) return;
-                                const result = await sendQQMediaMessage({
-                                    client,
-                                    to: deliveryTo,
-                                    mediaUrl: f.url,
-                                    fileNameHint: f.name,
-                                    accountId: account.accountId,
-                                    replyToId: payload.replyToId || undefined,
-                                    audioAsVoice: payload.audioAsVoice,
-                                });
-                                if (currentRunState?.isStale()) return;
-                                if (result) deliveredAnything = true;
-                                if (config.rateLimitMs > 0) await sleep(config.rateLimitMs);
+                                if (f.url) {
+                                    const url = await resolveMediaUrl(f.url);
+                                    if (currentRunState?.isStale()) return;
+                                    if (isImageFile(url)) {
+                                        const imgMsg = `[CQ:image,file=${url}]`;
+                                        if (isGroup) client.sendGroupMsg(groupId, imgMsg);
+                                        else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, imgMsg);
+                                        else client.sendPrivateMsg(userId, imgMsg);
+                                    } else if (isAudioFile(url) || isAudioFile(f.url)) {
+                                        const audioMsg = `[CQ:record,file=${url}]`;
+                                        if (isGroup) client.sendGroupMsg(groupId, audioMsg);
+                                        else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, `[语音] ${url}`);
+                                        else client.sendPrivateMsg(userId, audioMsg);
+                                    } else {
+                                        const txtMsg = `[CQ:file,file=${url},name=${f.name || 'file'}]`;
+                                        if (isGroup) client.sendGroupMsg(groupId, txtMsg);
+                                        else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, `[文件] ${url}`);
+                                        else client.sendPrivateMsg(userId, txtMsg);
+                                    }
+                                    deliveredAnything = true;
+                                    if (config.rateLimitMs > 0) await sleep(config.rateLimitMs);
+                                }
                             }
                         }
                     };
@@ -4832,18 +3846,15 @@ ${current}
                         console.log(`[QQLayerTrace] blockLen=${layeredContext.block.length} imageCount=${layeredContext.imageUrls.length}`);
                     }
                     if (layeredContext.block) systemBlock += layeredContext.block;
-                    if (fileHints.length > 0 || audioHints.length > 0 || imageHints.length > 0) {
+                    if (fileHints.length > 0 || imageHints.length > 0) {
                         systemBlock += `<attachments>\n`;
-                        for (const hint of [...fileHints, ...audioHints]) {
-                            const tag = hint.kind === "video" ? "qq_video" : hint.kind === "audio" ? "qq_audio" : "qq_file";
+                        for (const hint of fileHints) {
                             const parts = [`name=${hint.name}`];
                             if (hint.url) parts.push(`url=${hint.url}`);
-                            if (hint.localPath) parts.push(`local_path=${hint.localPath}`);
                             if (hint.fileId) parts.push(`file_id=${hint.fileId}`);
                             if (hint.busid) parts.push(`busid=${hint.busid}`);
                             if (hint.size !== undefined) parts.push(`size=${hint.size}`);
-                            if (hint.mimeType) parts.push(`mime=${hint.mimeType}`);
-                            systemBlock += `- ${tag} ${parts.join(" ")}\n`;
+                            systemBlock += `- qq_file ${parts.join(" ")}\n`;
                         }
                         for (const imageUrl of imageHints.slice(0, 5)) {
                             systemBlock += `- qq_image url=${imageUrl}\n`;
@@ -4857,109 +3868,10 @@ ${current}
                         ...imageHints,
                         ...layeredContext.imageUrls,
                     ])).slice(0, 5);
-                    if (config.cacheInboundImagesToLocal === false && inboundMediaUrls.length > 0) return;
                     const cachedInboundImages = config.cacheInboundImagesToLocal !== false
                         ? await cacheImageHintsLocally(inboundMediaUrls, imageHintMeta)
                         : { entries: inboundMediaUrls.map((url) => ({ url, type: imageHintMeta.get(url)?.mimeType ?? inferImageMimeType(url) ?? DEFAULT_QQ_IMAGE_MIME })), failures: [] as Array<{ url: string; error: string }> };
-// ── 生图功能（优先于识图模块） ─────────────────────────────
-                    const imageGenMatch = config.enableImageGen !== false &&
-                        config.imageGenModel?.trim() &&
-                        detectImageGenRequest(text.trim(), config.imageGenKeywords || "生图:,画:,绘图:");
-                    if (imageGenMatch) {
-                        try {
-                            // 获取图片 URL（最多 3 张）
-                            const imageUrls = cachedInboundImages.entries
-                                .filter(e => e.url)
-                                .slice(0, 3)
-                                .map(e => e.url as string);
-
-                            const isImageToImage = imageUrls.length > 0;
-                            const modeTag = isImageToImage ? `图生图 (${imageUrls.length}张)` : "文生图";
-                            console.log(`[QQ-imagegen] triggered by user=${userId} ${modeTag} prompt="${imageGenMatch.prompt}"`);
-
-                            const providers = (cfg as any)?.models?.providers || {};
-                            const result = await callImageGenerationAPI({
-                                prompt: imageGenMatch.prompt,
-                                quality: imageGenMatch.quality,
-                                size: imageGenMatch.size,
-                                style: imageGenMatch.style,
-                                model: config.imageGenModel!,
-                                endpoint: config.imageGenEndpoint,
-                                apiKey: config.imageGenApiKey,
-                                images: isImageToImage ? imageUrls : undefined,
-                            }, config, providers);
-                            const imageMsg = `[CQ:image,file=${result.imageUrl}]`;
-                            if (isGroup) {
-                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] ${imageMsg}`);
-                            } else if (isGuild) {
-                                client.sendGuildChannelMsg(guildId, channelId, imageMsg);
-                            } else {
-                                client.sendPrivateMsg(userId, imageMsg);
-                            }
-                            console.log(`[QQ-imagegen] success url=${result.imageUrl}`);
-                            return;
-                        } catch (err) {
-                            console.error("[QQ-imagegen] failed:", err);
-                            const errorMsg = `⚠️ 生图失败: ${err instanceof Error ? err.message : String(err)}`;
-                            if (isGroup) {
-                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] ${errorMsg}`);
-                            } else {
-                                client.sendPrivateMsg(userId, errorMsg);
-                            }
-                            return;
-                        }
-                    }
-                    // ── END 生图功能 ─────────────────────────
-
-                    // ── 独立识图模块 ──────────────────────────
-                    const visionModelRaw = config.visionModel || "";
-                    // 非触发的群/频道消息：尊重 proactiveReplyProbability 主动回复概率
-                    let skipVisionByProactive = false;
-                    if ((isGroup || isGuild) && !isTriggered) {
-                        const prob = config.proactiveReplyProbability ?? 0;
-                        if (prob <= 0 || Math.random() >= prob) {
-                            skipVisionByProactive = true;
-                        } else {
-                            console.log(`[QQ-vision-proactive] random hit prob=${prob} user=${userId} group=${groupId || "-"}`);
-                        }
-                    }
-                    if (visionModelRaw && cachedInboundImages.entries.some(e => e.path) && !skipVisionByProactive) {
-                        const cachedPaths = cachedInboundImages.entries
-                            .filter(e => e.path)
-                            .map(e => e.path as string);
-                        const providers = (cfg as any)?.models?.providers || {};
-                        const { describeImages } = await import("./vision.js");
-                        const result = await describeImages({
-                            imagePaths: cachedPaths,
-                            visionModelRaw,
-                            visionPrompt: config.visionModelPrompt || "请详细描述图片内容",
-                            visionRateLimitMs: config.visionRateLimitMs ?? 0,
-                            providers,
-                        });
-                        if (result.description) {
-                            console.log(`[QQ-vision] delivering ${result.description.length} chars directly, skipping main model`);
-                            // 尊重 rateLimitMs 延迟
-                            const rateLimit = config.rateLimitMs ?? 1000;
-                            if (rateLimit > 0) await sleep(rateLimit);
-                            // 直接发送识图描述，不走主模型
-                            const chunks = splitMessage(result.description, config.maxMessageLength ?? 4000);
-                            for (let ci = 0; ci < chunks.length; ci++) {
-                                if (ci > 0 && rateLimit > 0) await sleep(rateLimit);
-                                if (isGroup) client.sendGroupMsg(groupId, chunks[ci]);
-                                else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunks[ci]);
-                                else client.sendPrivateMsg(userId, chunks[ci]);
-                            }
-                            return; // 跳过主模型 dispatch，直接结束消息处理
-                        }
-                        console.log(`[QQ-vision] no description: ${result.error || "unknown"}, falling through to main model`);
-                    }
-                    // ── END 独立识图模块 ──────────────────────
-
-                    const attachmentMediaEntries = collectAttachmentMediaEntries([...fileHints, ...audioHints]);
-                    const inboundMediaPayload = buildInboundMediaPayloadFromEntries([
-                        ...cachedInboundImages.entries,
-                        ...attachmentMediaEntries,
-                    ]);
+                    const inboundMediaPayload = buildInboundMediaPayloadFromEntries(cachedInboundImages.entries);
                     if (config.debugLayerTrace) {
                         const mediaPathCount = Array.isArray((inboundMediaPayload as any).MediaPaths)
                             ? (inboundMediaPayload as any).MediaPaths.length
@@ -4968,7 +3880,7 @@ ${current}
                             ? (inboundMediaPayload as any).MediaUrls.length
                             : ((inboundMediaPayload as any).MediaUrl ? 1 : 0);
                         console.log(
-                            `[QQLayerTrace] inbound media urls=${inboundMediaUrls.length} attachments=${attachmentMediaEntries.length} ctxUrls=${mediaUrlCount} ctxPaths=${mediaPathCount} cacheFailures=${cachedInboundImages.failures.length}`
+                            `[QQLayerTrace] inbound media urls=${inboundMediaUrls.length} ctxUrls=${mediaUrlCount} ctxPaths=${mediaPathCount} cacheFailures=${cachedInboundImages.failures.length}`
                         );
                         if (cachedInboundImages.failures.length > 0) {
                             console.warn(
@@ -5044,22 +3956,14 @@ ${current}
                         try {
                             const matchedAgentId = route.agentId;
                             const matchedAgentConfig = ((cfg as any).agents?.list || []).find((a: any) => a.id === matchedAgentId);
-                            // OpenClaw accepts either "provider/model", or
-                            // { primary, fallbacks }, or the newer { "provider/model": {} } map.
+                            // OpenClaw accepts either "provider/model" or
+                            // { primary, fallbacks } for agent model config.
                             const normalizeModelConfig = (value: any) => {
                                 if (typeof value === "string") {
                                     const primary = value.trim();
                                     return primary ? { primary, fallbacks: [] as string[] } : undefined;
                                 }
                                 if (!value || typeof value !== "object") {
-                                    return undefined;
-                                }
-                                // Handle { "provider/model": {...}, ... } maps format
-                                if (!("primary" in value) && !("fallbacks" in value)) {
-                                    const modelKeys = Object.keys(value).filter(k => k.includes("/"));
-                                    if (modelKeys.length > 0) {
-                                        return { primary: modelKeys[0], fallbacks: modelKeys.slice(1) };
-                                    }
                                     return undefined;
                                 }
                                 const primary = typeof value.primary === "string" ? value.primary.trim() : "";
@@ -5074,28 +3978,12 @@ ${current}
                                 return { primary, fallbacks };
                             };
                             const rawModelConfig =
-                                normalizeModelConfig(matchedAgentConfig?.model || matchedAgentConfig?.models) ||
-                                normalizeModelConfig((cfg as any).agents?.defaults?.model || (cfg as any).agents?.defaults?.models) ||
+                                normalizeModelConfig(matchedAgentConfig?.model) ||
+                                normalizeModelConfig((cfg as any).agents?.defaults?.model) ||
                                 { primary: "", fallbacks: [] as string[] };
+                            const fallbacks = rawModelConfig.fallbacks;
 
-                            // ── QQ config 模型回退队列 ──────────────────────
-                            const allModelKeys = Object.keys((cfg as any)?.agents?.defaults?.models || {});
-                            const qqPrimary = config.primaryModel?.trim() || rawModelConfig.primary || allModelKeys[0] || "";
-                            const configuredFallbackList = (config.fallbackModels || "")
-                                .split(",").map(s => s.trim()).filter(s => s && allModelKeys.includes(s) && s !== qqPrimary);
-                            const remainingModels = allModelKeys.filter(m => m !== qqPrimary && !configuredFallbackList.includes(m));
-                            // Fisher-Yates 随机打乱剩余模型
-                            for (let i = remainingModels.length - 1; i > 0; i--) {
-                                const j = Math.floor(Math.random() * (i + 1));
-                                [remainingModels[i], remainingModels[j]] = [remainingModels[j], remainingModels[i]];
-                            }
-                            const qqFallbacks = [...configuredFallbackList, ...remainingModels];
-                            const modelPoolSize = 1 + qqFallbacks.length;
-                            console.log(`[QQ-model] primary=${qqPrimary} explicitFallbacks=[${configuredFallbackList}] randomFallbacks=[${remainingModels}] totalPool=${modelPoolSize}`);
-                            // ── END 模型回退队列 ──────────────────────────
-
-                            const fallbacks = qqFallbacks.length > 0 ? qqFallbacks : rawModelConfig.fallbacks;
-                            const modelsToTry = [qqPrimary || null, ...fallbacks];
+                            const modelsToTry = [null, ...fallbacks];
                             let globalDispatchError: any = null;
 
                             out_loop:
@@ -5109,16 +3997,13 @@ ${current}
                                 }
 
                                 if (!modelToTest) {
-                                    globalDispatchError = new Error("[QQ] No model resolved for this route; check agents.<id>.model, agents.defaults.model, or agents.defaults.models");
+                                    globalDispatchError = new Error("[QQ] No model resolved for this route; check agents.<id>.model or agents.defaults.model");
                                     console.error(globalDispatchError);
                                     break out_loop;
                                 }
 
-                                if (modelIndex === 0) {
-                                    console.log(`[QQ-model] attempting ${modelToTest} (1/${modelsToTry.length})`);
-                                }
                                 if (modelIndex > 0) {
-                                    console.log(`[QQ-model] failover to ${modelToTest} (${modelIndex + 1}/${modelsToTry.length})`);
+                                    console.log(`[QQ] Failover triggered: Switching to fallback model ${modelToTest}`);
                                     if (config.enableErrorNotify !== false) {
                                         const notifyMsg = `⏳ 当前服务无响应，正尝试切换至备用线路 ${modelIndex}/${fallbacks.length}...`;
                                         if (isGroup) client.sendGroupMsg(groupId, notifyMsg);
@@ -5127,18 +4012,17 @@ ${current}
                                     }
                                 }
 
-                                const remainingModels = modelsToTry.slice(modelIndex + 1).filter(Boolean) as string[];
                                 currentCfg = {
                                     ...(cfg as any),
                                     agents: {
                                         ...((cfg as any).agents || {}),
                                         defaults: {
                                             ...((cfg as any).agents?.defaults || {}),
-                                            model: { primary: modelToTest, fallbacks: remainingModels }
+                                            model: { primary: modelToTest, fallbacks: [] }
                                         },
                                         list: ((cfg as any).agents?.list || []).map((a: any) => {
                                             if (a.id === matchedAgentId) {
-                                                return { ...a, model: { primary: modelToTest, fallbacks: remainingModels } };
+                                                return { ...a, model: { primary: modelToTest, fallbacks: [] } };
                                             }
                                             return a;
                                         })
@@ -5163,12 +4047,12 @@ ${current}
                                         }
 
                                         const dispatchStartTime = Date.now();
-                                        let dispatchResult: any = null;
+                                        let dispatchDurationMs = 0;
                                         try {
                                             resetBufferedFinalTexts();
                                             resetBufferedUnknownTexts();
                                             const replyCfg = buildQQReplyConfig(currentCfg as OpenClawConfig, config);
-                                            dispatchResult = await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+                                            const dispatchResult = await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
                                                 ctx: mergedCtx,
                                                 cfg: replyCfg,
                                                 dispatcherOptions: {
@@ -5182,18 +4066,19 @@ ${current}
                                                 },
                                                 replyOptions: {},
                                             });
+                                            dispatchDurationMs = Date.now() - dispatchStartTime;
                                             if (!runState.isStale()) {
-                                            const totalDispatched = (dispatchResult?.counts?.tool || 0) + (dispatchResult?.counts?.block || 0) + (dispatchResult?.counts?.final || 0);
-                                            console.log(`[QQ] dispatch result queuedFinal=${String(Boolean(dispatchResult?.queuedFinal))} counts=${JSON.stringify(dispatchResult?.counts || {})} totalDispatched=${totalDispatched} duration=${dispatchDurationMs}ms model=${modelToTest} deliverCalls=${deliverCallCount} session=${route.sessionKey}`);
-                                            if (totalDispatched === 0 && deliverCallCount === 0 && dispatchDurationMs >= 500) {
-                                                console.log(`[QQ] WARNING: model ${modelToTest} returned zero output in ${dispatchDurationMs}ms — model may be down or returning empty`);
+                                                const totalDispatched = (dispatchResult?.counts?.tool || 0) + (dispatchResult?.counts?.block || 0) + (dispatchResult?.counts?.final || 0);
+                                                console.log(`[QQ] dispatch result queuedFinal=${String(Boolean(dispatchResult?.queuedFinal))} counts=${JSON.stringify(dispatchResult?.counts || {})} totalDispatched=${totalDispatched} duration=${dispatchDurationMs}ms model=${modelToTest} deliverCalls=${deliverCallCount} session=${route.sessionKey}`);
+                                                if (totalDispatched === 0 && deliverCallCount === 0 && dispatchDurationMs >= 500) {
+                                                    console.log(`[QQ] WARNING: model ${modelToTest} returned zero output in ${dispatchDurationMs}ms — model may be down or returning empty`);
+                                                }
                                             }
-                                        }
                                         } catch (err) {
+                                            dispatchDurationMs = Date.now() - dispatchStartTime;
                                             globalDispatchError = err;
                                             console.error(`[QQ] Error during buffered reply dispatch (attempt ${tryCount + 1}/${maxRetries + 1}):`, err);
                                         }
-                                        const dispatchDurationMs = Date.now() - dispatchStartTime;
                                         if (runState.isStale()) {
                                             console.log(`[QQ] dispatch became stale after ${dispatchDurationMs}ms model=${modelToTest}, breaking out`);
                                             break out_loop;
@@ -5224,13 +4109,7 @@ ${current}
                                             const flushedBufferedText = await flushBufferedFinalTexts();
                                             if (flushedBufferedText) deliveredAnything = true;
                                             const shouldFallback = config.enableEmptyReplyFallback !== false && !text.trim().startsWith('/');
-                                            const dispatchCounts = (dispatchResult?.counts && typeof dispatchResult.counts === "object") ? dispatchResult.counts : {};
-                                            const sawDispatcherOutput = Boolean(
-                                                dispatchResult?.queuedFinal ||
-                                                Number(dispatchCounts.block || 0) > 0 ||
-                                                Number(dispatchCounts.final || 0) > 0
-                                            );
-                                            if (deliveredAnything || sawReplyContent || sawDispatcherOutput || !shouldFallback) {
+                                            if (deliveredAnything || !shouldFallback) {
                                                 break out_loop;
                                             }
 
@@ -5242,7 +4121,6 @@ ${current}
 
                                         if (tryCount === maxRetries) {
                                                 if (modelIndex === modelsToTry.length - 1 && !runState.isStale()) {
-                                                    console.log(`[QQ-model] all ${modelsToTry.length} models exhausted`);
                                                     if (globalDispatchError) {
                                                         const errMessage = (globalDispatchError instanceof Error) ? globalDispatchError.message : String(globalDispatchError);
                                                         const notifyMsg = errMessage.trim() ? `⚠️ 服务调用失败: ${errMessage}` : "⚠️ 服务调用失败，无具体错误信息，请稍后重试。";
@@ -5327,68 +4205,200 @@ ${current}
         sendText: async ({ to, text, accountId, replyToId }) => {
             const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
             if (!client) throw new Error("QQ client not connected");
-            const lastAck = await sendQQTextMessage({ client, to, text, replyToId });
+            const normalizedText = await resolveInlineCqRecord(text);
+            const chunks = splitMessage(normalizedText, 4000);
+            let lastAck: any = null;
+            for (let i = 0; i < chunks.length; i++) {
+                let message: OneBotMessage | string = chunks[i];
+                if (replyToId && i === 0) message = [{ type: "reply", data: { id: String(replyToId) } }, { type: "text", data: { text: chunks[i] } }];
+                const ack = await sendOneBotMessageWithAck(client, to, message);
+                if (!ack.ok) {
+                    throw new Error(ack.error || "Failed to send text");
+                }
+                lastAck = ack.data;
+
+                if (chunks.length > 1) await sleep(1000);
+            }
             return {
                 channel: "qq",
                 messageId: resolveOutboundMessageId(lastAck),
                 timestamp: Date.now(),
             };
         },
-        sendMedia: async (ctx) => {
-            const { to, text, mediaUrl, accountId, replyToId } = ctx;
-            const extra = ctx as any;
+        sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
             const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
             if (!client) throw new Error("QQ client not connected");
-            if (!mediaUrl) throw new Error("mediaUrl is required");
-            return await sendQQMediaMessage({
-                client,
-                to,
-                text,
-                mediaUrl,
-                accountId,
-                replyToId,
-                mediaAccess: extra.mediaAccess as QQOutboundMediaAccess | undefined,
-                mediaLocalRoots: extra.mediaLocalRoots,
-                mediaReadFile: extra.mediaReadFile,
-                forceDocument: extra.forceDocument,
-                audioAsVoice: extra.audioAsVoice,
-            });
-        },
-        sendPayload: async (ctx) => {
-            const { to, text, payload, accountId, replyToId } = ctx;
-            const extra = ctx as any;
-            const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
-            if (!client) throw new Error("QQ client not connected");
-            const mediaItems = collectOutboundMediaItemsFromPayload(payload);
-            const payloadText = typeof (payload as any)?.text === "string" ? (payload as any).text : text;
-            const effectiveReplyToId = (payload as any)?.replyToId || replyToId;
-            const effectiveAudioAsVoice = typeof (payload as any)?.audioAsVoice === "boolean" ? (payload as any).audioAsVoice : extra.audioAsVoice;
 
-            if (mediaItems.length === 0) {
-                const lastAck = await sendQQTextMessage({ client, to, text: payloadText || "", replyToId: effectiveReplyToId });
-                return { channel: "qq", messageId: resolveOutboundMessageId(lastAck), timestamp: Date.now() };
+            const runtimeCfg = (accountConfigs.get(accountId || DEFAULT_ACCOUNT_ID)
+                || accountConfigs.get(DEFAULT_ACCOUNT_ID)
+                || {}) as Partial<QQConfig>;
+
+            const hostSharedDir = typeof runtimeCfg.sharedMediaHostDir === "string" ? runtimeCfg.sharedMediaHostDir.trim() : "";
+            const containerSharedDirRaw = typeof runtimeCfg.sharedMediaContainerDir === "string" ? runtimeCfg.sharedMediaContainerDir.trim() : "";
+            const containerSharedDir = containerSharedDirRaw || "/openclaw_media";
+
+            const sourceKind = detectMediaKind(mediaUrl);
+            const groupId = parseGroupIdFromTarget(to);
+            const localSourcePath = toLocalPathIfAny(mediaUrl);
+            let stagedSharedPath: string | null = null;
+            if (localSourcePath && hostSharedDir) {
+                stagedSharedPath = await stageLocalFileForContainer(localSourcePath, hostSharedDir, containerSharedDir);
             }
 
-            let lastResult: any = null;
-            for (let i = 0; i < mediaItems.length; i += 1) {
-                const item = mediaItems[i];
-                lastResult = await sendQQMediaMessage({
-                    client,
-                    to,
-                    text: i === 0 ? payloadText : "",
-                    mediaUrl: item.url,
-                    accountId,
-                    replyToId: effectiveReplyToId,
-                    mediaAccess: extra.mediaAccess as QQOutboundMediaAccess | undefined,
-                    mediaLocalRoots: extra.mediaLocalRoots,
-                    mediaReadFile: extra.mediaReadFile,
-                    fileNameHint: item.name,
-                    forceDocument: extra.forceDocument,
-                    audioAsVoice: effectiveAudioAsVoice,
-                });
-                if (i < mediaItems.length - 1) await sleep(1000);
+            const audioLikeSource = sourceKind === "audio";
+            let stagedAudioFile: string | null = null;
+            if (audioLikeSource && hostSharedDir) {
+                if (localSourcePath) {
+                    try {
+                        const copiedName = await ensureFileInSharedMedia(localSourcePath, hostSharedDir);
+                        stagedAudioFile = path.posix.join(containerSharedDir.replace(/\\/g, "/"), copiedName);
+                    } catch (err) {
+                        console.warn(`[QQ] Failed to stage source audio into shared media dir: ${String(err)}`);
+                    }
+                }
             }
-            return lastResult || { channel: "qq", messageId: resolveOutboundMessageId(), timestamp: Date.now() };
+            const finalUrl = sourceKind === "image" || sourceKind === "audio"
+                ? await resolveMediaUrl(mediaUrl)
+                : mediaUrl;
+
+            let textAck: any = null;
+            if (text && text.trim()) {
+                const textMessage: OneBotMessage = [];
+                if (replyToId) textMessage.push({ type: "reply", data: { id: String(replyToId) } });
+                textMessage.push({ type: "text", data: { text } });
+                const ack = await sendOneBotMessageWithAck(client, to, textMessage);
+                if (!ack.ok) {
+                    throw new Error(`Text send failed: ${ack.error || "unknown"}`);
+                }
+                textAck = ack.data;
+            }
+
+            const mediaMessage: OneBotMessage = [];
+            if (replyToId && !(text && text.trim())) mediaMessage.push({ type: "reply", data: { id: String(replyToId) } });
+            const mediaKind = detectMediaKind(mediaUrl, finalUrl);
+            const audioLike = mediaKind === "audio";
+            const imageLike = mediaKind === "image";
+            const videoLike = mediaKind === "video";
+            const fileLike = mediaKind === "file";
+
+            if (audioLike && textAck) {
+                const configuredDelay = Number(runtimeCfg.rateLimitMs ?? 1000);
+                const delayMs = Number.isFinite(configuredDelay) ? Math.max(1200, configuredDelay) : 1200;
+                await sleep(delayMs);
+            }
+
+            if (imageLike) mediaMessage.push({ type: "image", data: { file: finalUrl } });
+            else if (audioLike) {
+                let recordFile = stagedAudioFile || finalUrl;
+                if (!finalUrl.startsWith("base64://") && hostSharedDir) {
+                    try {
+                        const localPath = finalUrl.startsWith("file:") ? fileURLToPath(finalUrl) : finalUrl;
+                        const copiedName = await ensureFileInSharedMedia(localPath, hostSharedDir);
+                        recordFile = path.posix.join(containerSharedDir.replace(/\\/g, "/"), copiedName);
+                    } catch (err) {
+                        console.warn(`[QQ] Failed to stage audio into shared media dir: ${String(err)}`);
+                    }
+                }
+                mediaMessage.push({ type: "record", data: { file: recordFile } });
+            }
+            else if (videoLike) {
+                const videoFile = stagedSharedPath || finalUrl;
+                mediaMessage.push({ type: "video", data: { file: videoFile } });
+            } else {
+                if (groupId && (stagedSharedPath || localSourcePath)) {
+                    const uploadPath = stagedSharedPath || localSourcePath!;
+                    const uploadName = guessFileName(mediaUrl);
+                    const uploadAck = await uploadGroupFile(client, groupId, uploadPath, uploadName);
+                    if (uploadAck.ok) {
+                        return {
+                            channel: "qq",
+                            messageId: resolveOutboundMessageId(textAck),
+                            timestamp: Date.now(),
+                            meta: {
+                                textSent: Boolean(textAck),
+                                mediaSent: true,
+                                transport: "upload_group_file",
+                                mediaKind: "file",
+                            },
+                        };
+                    }
+                    console.warn(`[QQ] upload_group_file failed (primary path): ${uploadAck.error || "unknown"}`);
+                }
+                mediaMessage.push({ type: "file", data: { file: stagedSharedPath || finalUrl, name: guessFileName(mediaUrl) } });
+            }
+
+            const mediaAck = await sendOneBotMessageWithAck(client, to, mediaMessage);
+            if (!mediaAck.ok) {
+                const primaryError = mediaAck.error || "unknown";
+                const errorClass = classifyMediaError(primaryError);
+                if ((videoLike || fileLike) && groupId && (stagedSharedPath || localSourcePath)) {
+                    const uploadPath = stagedSharedPath || localSourcePath!;
+                    const uploadName = guessFileName(mediaUrl);
+                    const uploadAck = await uploadGroupFile(client, groupId, uploadPath, uploadName);
+                    if (uploadAck.ok) {
+                        return {
+                            channel: "qq",
+                            messageId: resolveOutboundMessageId(textAck),
+                            timestamp: Date.now(),
+                            meta: {
+                                textSent: Boolean(textAck),
+                                mediaSent: true,
+                                fallbackSent: true,
+                                fallbackType: "upload_group_file",
+                                mediaKind: videoLike ? "video" : "file",
+                                errorClass,
+                                note: `Primary media path failed; fallback upload_group_file succeeded. reason=${primaryError}`,
+                            },
+                        };
+                    }
+                }
+                if (audioLike) {
+                    const fileFallback: OneBotMessage = [];
+                    if (replyToId && !(text && text.trim())) fileFallback.push({ type: "reply", data: { id: String(replyToId) } });
+                    let fallbackFile = stagedAudioFile || finalUrl;
+                    if (fallbackFile.startsWith("base64://")) {
+                        throw new Error(`Media send failed: ${primaryError} [${errorClass}]`);
+                    }
+                    if (!finalUrl.startsWith("base64://") && hostSharedDir) {
+                        try {
+                            const localPath = finalUrl.startsWith("file:") ? fileURLToPath(finalUrl) : finalUrl;
+                            const copiedName = await ensureFileInSharedMedia(localPath, hostSharedDir);
+                            fallbackFile = path.posix.join(containerSharedDir.replace(/\\/g, "/"), copiedName);
+                        } catch (err) {
+                            console.warn(`[QQ] Failed to stage fallback audio file into shared media dir: ${String(err)}`);
+                        }
+                    }
+                    fileFallback.push({ type: "file", data: { file: fallbackFile } });
+                    const fallbackAck = await sendOneBotMessageWithAck(client, to, fileFallback);
+                    if (fallbackAck.ok) {
+                        return {
+                            channel: "qq",
+                            messageId: resolveOutboundMessageId(fallbackAck.data, textAck),
+                            timestamp: Date.now(),
+                            meta: {
+                                textSent: Boolean(textAck),
+                                mediaSent: true,
+                                fallbackSent: true,
+                                fallbackType: "file",
+                                errorClass,
+                                mediaKind: "audio",
+                                note: `Audio(record) failed; fallback file sent. reason=${primaryError}`,
+                            },
+                        };
+                    }
+                }
+                throw new Error(`Media send failed: ${primaryError} [${errorClass}]`);
+            }
+            return {
+                channel: "qq",
+                messageId: resolveOutboundMessageId(mediaAck.data, textAck),
+                timestamp: Date.now(),
+                meta: {
+                    textSent: Boolean(textAck),
+                    mediaSent: true,
+                    mediaKind,
+                },
+            };
         },
         // @ts-ignore
         deleteMessage: async ({ messageId, accountId }) => {
