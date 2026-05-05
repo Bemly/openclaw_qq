@@ -5170,6 +5170,7 @@ ${current}
                                             resetBufferedFinalTexts();
                                             resetBufferedUnknownTexts();
                                             const replyCfg = buildQQReplyConfig(currentCfg as OpenClawConfig, config);
+                                            console.log(`[QQ-dispatch] model=${JSON.stringify((replyCfg as any).agents?.defaults?.model)} modelsKeys=${JSON.stringify(Object.keys((replyCfg as any).agents?.defaults?.models || {}))} blockStreaming=${(replyCfg as any).agents?.defaults?.blockStreamingDefault} blockStreamingBreak=${(replyCfg as any).agents?.defaults?.blockStreamingBreak}`);
                                             dispatchResult = await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
                                                 ctx: mergedCtx,
                                                 cfg: replyCfg,
