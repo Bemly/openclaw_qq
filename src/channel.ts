@@ -3187,6 +3187,7 @@ async function checkPoliticalSpeech(
         console.error(`[QQ-political] check failed: ${String(err)}`);
         return { isPolitical: false, reason: "" };
     }
+}
 function collectOutboundMediaItemsFromPayload(payload: any): QQOutboundMediaItem[] {
     const items: QQOutboundMediaItem[] = [];
     const push = (url: unknown, name?: unknown) => {
