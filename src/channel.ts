@@ -5193,6 +5193,7 @@ ${current}
                                             if (!runState.isStale()) {
                                                 const totalDispatched = (dispatchResult?.counts?.tool || 0) + (dispatchResult?.counts?.block || 0) + (dispatchResult?.counts?.final || 0);
                                                 console.log(`[QQ] dispatch result queuedFinal=${String(Boolean(dispatchResult?.queuedFinal))} counts=${JSON.stringify(dispatchResult?.counts || {})} totalDispatched=${totalDispatched} duration=${dispatchDurationMs}ms model=${modelToTest} deliverCalls=${deliverCallCount} session=${route.sessionKey}`);
+                                                console.log(`[QQ] dispatchResult raw keys: ${Object.keys(dispatchResult || {}).join(",")} fullResult: ${JSON.stringify(dispatchResult).slice(0,500)}`);
                                                 if (totalDispatched === 0 && deliverCallCount === 0 && dispatchDurationMs >= 500) {
                                                     console.log(`[QQ] WARNING: model ${modelToTest} returned zero output in ${dispatchDurationMs}ms — model may be down or returning empty`);
                                                 }
