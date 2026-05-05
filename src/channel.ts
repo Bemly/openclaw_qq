@@ -71,6 +71,10 @@ type QQSetupInput = ChannelSetupInput & {
 
 const sessionQueues = new Map<string, SessionQueue>();
 
+let lastImageGenTimestamp = 0;
+
+const politicalModerationCooldown = new Map<string, number>();
+
 async function drainSessionQueue(sessionKey: string, config: QQConfig, sendMessageFn: (msg: string) => void) {
     const q = sessionQueues.get(sessionKey);
     if (!q || q.isProcessing || q.pendingPayloads.length === 0) return;
@@ -940,11 +944,355 @@ async function grokDrawDirect(prompt: string): Promise<{ ok: true; url: string }
     }
 }
 
-function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig): OpenClawConfig {
+interface ImageGenMatch {
+    prompt: string;
+    quality?: string;
+    size?: string;
+    style?: string;
+}
+
+function detectImageGenRequest(text: string, keywords: string): ImageGenMatch | null {
+    if (!text || !keywords) return null;
+
+    const keywordList = keywords.split(",").map(k => k.trim()).filter(k => k);
+    if (keywordList.length === 0) return null;
+
+    // 剥掉开头的 CQ 码（如 [CQ:at,qq=xxx]）和 @username 文本
+    const cleaned = text.trim()
+        .replace(/^\[CQ:[^\]]+\]\s*/, "")
+        .replace(/^@\S+\s*/, "")
+        .trim();
+
+    // 检查是否包含任意关键词（不限是否在开头）
+    let triggeredKeyword: string | null = null;
+    let triggerIndex = -1;
+    for (const keyword of keywordList) {
+        const idx = cleaned.indexOf(keyword);
+        if (idx !== -1) {
+            if (triggerIndex === -1 || idx < triggerIndex) {
+                triggerIndex = idx;
+                triggeredKeyword = keyword;
+            }
+        }
+    }
+
+    if (!triggeredKeyword) return null;
+
+    // 提取 prompt：移除触发关键词和前面的内容
+    let promptPart = cleaned.slice(triggerIndex + triggeredKeyword.length).trim();
+
+    // 清理 -- 参数
+    let quality: string | undefined;
+    let size: string | undefined;
+    let style: string | undefined;
+
+    const paramsMatch = promptPart.match(/--\w+=\S+/g);
+    if (paramsMatch) {
+        for (const param of paramsMatch) {
+            const [key, value] = param.slice(2).split("=");
+            if (key === "quality") quality = value;
+            else if (key === "size") size = value;
+            else if (key === "style") style = value;
+        }
+        promptPart = promptPart.replace(/--\w+=\S+/g, "").trim();
+    }
+
+    // 如果没有通过 --size 指定，扫描全文判断尺寸（优先级：竖 → 横 → 正方形）
+    if (!size) {
+        const fullText = cleaned.toLowerCase();
+
+        // 竖版关键词（按顺序匹配）
+        const portraitKeywords = ["720*1280", "720×1280", "720x1280", "9:16", "竖", "竖版"];
+        for (const kw of portraitKeywords) {
+            if (fullText.includes(kw.toLowerCase())) {
+                size = "720x1280";
+                break;
+            }
+        }
+
+        // 横版关键词（按顺序匹配）
+        if (!size) {
+            const landscapeKeywords = ["1280*720", "1280×720", "1280x720", "16:9", "横", "横版"];
+            for (const kw of landscapeKeywords) {
+                if (fullText.includes(kw.toLowerCase())) {
+                    size = "1280x720";
+                    break;
+                }
+            }
+        }
+
+        // 默认正方形
+        if (!size) {
+            size = "1024x1024";
+        }
+    }
+
+    // 清理 prompt：移除尺寸相关关键词
+    if (promptPart) {
+        const sizeKeywords = ["720*1280", "720×1280", "720x1280", "9:16", "竖", "竖版",
+                             "1280*720", "1280×720", "1280x720", "16:9", "横", "横版"];
+        let cleanedPrompt = promptPart;
+        for (const kw of sizeKeywords) {
+            cleanedPrompt = cleanedPrompt.replace(new RegExp(kw, "gi"), "");
+        }
+        promptPart = cleanedPrompt.trim();
+    }
+
+    if (promptPart) {
+        return { prompt: promptPart, quality, size, style };
+    }
+
+    return null;
+}
+
+interface ImageGenParams {
+    prompt: string;
+    quality?: string;
+    size?: string;
+    style?: string;
+    model: string;
+    endpoint?: string;
+    apiKey?: string;
+    images?: string[]; // 图片 URL 列表，用于图生图
+}
+
+interface ImageGenResult {
+    imageUrl: string;
+}
+
+async function callImageGenerationAPI(
+    params: ImageGenParams,
+    config: QQConfig,
+    providers: Record<string, { baseUrl?: string; apiKey?: string; endpoint?: string }>
+): Promise<ImageGenResult> {
+    const { prompt, model, endpoint, apiKey } = params;
+
+    if (config.imageGenRateLimitMs > 0) {
+        const now = Date.now();
+        const elapsed = now - lastImageGenTimestamp;
+        if (elapsed < config.imageGenRateLimitMs) {
+            const waitTime = config.imageGenRateLimitMs - elapsed;
+            console.log(`[QQ] 生图速率限制: 延迟 ${waitTime}ms`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+    }
+    lastImageGenTimestamp = Date.now();
+
+    const [provider, modelName] = model.split("/");
+    if (!provider || !modelName) {
+        throw new Error(`无效的模型格式: ${model}`);
+    }
+
+    const providerInfo = providers[provider];
+    if (!providerInfo) {
+        throw new Error(`未配置 provider: ${provider}，请在 OpenClaw 配置中添加 models.providers.${provider}`);
+    }
+
+    const providerType = determineProviderType(provider);
+
+    // 确定最终的 API URL
+    let apiUrl: string;
+    if (endpoint) {
+        apiUrl = endpoint;
+    } else if (provider === "openai") {
+        apiUrl = "https://api.openai.com/v1/images/generations";
+    } else if (providerType === "bailian") {
+        throw new Error(
+            "百炼生图需要配置 imageGenEndpoint，请在 QQ 通道配置中添加: " +
+            "\"imageGenEndpoint\": \"https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation\""
+        );
+    } else {
+        const baseUrl = providerInfo.baseUrl || providerInfo.endpoint || "https://api.example.com/v1";
+        apiUrl = baseUrl.replace(/\/$/, "") + "/images/generations";
+    }
+    const requestApiKey = apiKey || providerInfo.apiKey;
+
+    // 构建 payload
+    const payload = buildImageGenPayload({
+        modelName,
+        prompt,
+        quality: params.quality || config.imageGenQuality || "standard",
+        size: params.size || config.imageGenSize || "1024x1024",
+        style: params.style || config.imageGenStyle || "vivid",
+        providerType,
+        images: params.images, // 传递图片列表
+    });
+
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+    };
+    if (requestApiKey) {
+        headers["Authorization"] = `Bearer ${requestApiKey}`;
+    }
+
+    if (providerType === "bailian") {
+        // 百炼/DashScope 生图 API：支持异步和同步两种模式
+        const isAsync = config.imageGenAsyncMode !== false; // 默认 true=异步
+        if (isAsync) {
+            headers["X-DashScope-Async"] = "enable";
+        }
+
+        const response = await fetch(apiUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`生图 API 失败 (${response.status}): ${errorText}`);
+        }
+
+        const data = await response.json() as any;
+
+        if (isAsync) {
+            // 异步模式：提交任务 → 轮询结果
+            const taskId = data?.output?.task_id;
+            if (!taskId) {
+                throw new Error(`生图任务创建失败，未返回 task_id: ${JSON.stringify(data)}`);
+            }
+            console.log(`[QQ-imagegen] bailian async task_id=${taskId}`);
+
+            // 轮询任务状态
+            const maxAttempts = 30;
+            const pollInterval = 2000;
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
+                const pollBase = new URL(apiUrl).origin;
+                const pollResp = await fetch(`${pollBase}/api/v1/tasks/${taskId}`, {
+                    headers: { "Authorization": `Bearer ${requestApiKey}` },
+                });
+                const pollData = await pollResp.json() as any;
+                const taskStatus = pollData?.output?.task_status;
+                console.log(`[QQ-imagegen] poll attempt=${attempt + 1} status=${taskStatus}`);
+
+                if (taskStatus === "SUCCEEDED") {
+                    const url = pollData?.output?.choices?.[0]?.message?.content?.[0]?.image
+                        || pollData?.output?.results?.[0]?.url;
+                    if (!url) throw new Error(`生图任务完成但无图片 URL: ${JSON.stringify(pollData)}`);
+                    return { imageUrl: url };
+                }
+                if (taskStatus === "FAILED") {
+                    throw new Error(`生图任务失败: ${JSON.stringify(pollData)}`);
+                }
+                // PENDING / RUNNING → 继续轮询
+            }
+            throw new Error(`生图任务超时（${maxAttempts * pollInterval / 1000}s）: task_id=${taskId}`);
+        } else {
+            // 同步模式：直接解析响应（如 Token Plan）
+            console.log(`[QQ-imagegen] bailian sync mode`);
+            return parseImageGenResponse(data, providerType);
+        }
+    }
+
+    // 非百炼（openai / custom）同步 API
+    const response = await fetch(apiUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`生图 API 失败 (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json();
+    return parseImageGenResponse(data, providerType);
+}
+
+function determineProviderType(
+    provider: string
+): "openai" | "bailian" | "custom" {
+    if (provider === "openai") return "openai";
+    if (provider === "bailian" || provider === "aliyun") return "bailian";
+    return "custom";
+}
+
+function buildImageGenPayload(params: {
+    modelName: string;
+    prompt: string;
+    quality: string;
+    size: string;
+    style: string;
+    providerType: "openai" | "bailian" | "custom";
+    images?: string[];
+}): any {
+    const { modelName, prompt, quality, size, style, providerType, images } = params;
+
+    if (providerType === "openai") {
+        return {
+            model: modelName,
+            prompt,
+            n: 1,
+            quality,
+            size,
+            ...(style && !modelName.includes("dall-e-2") && { style }),
+        };
+    } else if (providerType === "bailian") {
+        // 构建消息内容：图片 + 文本
+        let content: any[] = [];
+        if (images && images.length > 0) {
+            for (const imgUrl of images) {
+                content.push({ image: imgUrl });
+            }
+        }
+        content.push({ text: prompt });
+
+        return {
+            model: modelName,
+            input: {
+                messages: [
+                    {
+                        role: "user",
+                        content,
+                    },
+                ],
+            },
+            parameters: {
+                size: size.replace("x", "*"),
+                n: 1,
+            },
+        };
+    } else {
+        return {
+            model: modelName,
+            prompt,
+            n: 1,
+            size,
+            ...(quality && { quality }),
+            ...(style && { style }),
+        };
+    }
+}
+
+function parseImageGenResponse(
+    data: any,
+    providerType: "openai" | "bailian" | "custom"
+): ImageGenResult {
+    if (providerType === "openai" || providerType === "custom") {
+        if (data.data?.[0]?.url) {
+            return { imageUrl: data.data[0].url };
+        }
+    } else if (providerType === "bailian") {
+        // 支持两种 bailian 格式：
+        // 1. 异步轮询返回：output.results[0].url 或 output.choices[0].message.content[0].image
+        // 2. 同步返回（Token Plan）：output.choices[0].message.content[0].image
+        const url = data.output?.choices?.[0]?.message?.content?.[0]?.image
+            || data.output?.results?.[0]?.url;
+        if (url) {
+            return { imageUrl: url };
+        }
+    }
+
+    throw new Error(`无法解析生图响应: ${JSON.stringify(data)}`);
+}
+
+function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig, activeModel?: string, allModels?: string[]): OpenClawConfig {
     const blockStreaming = config.blockStreaming ?? true;
     const blockStreamingBreak = config.blockStreamingBreak ?? "message_end";
 
-    return {
+    const result: OpenClawConfig = {
         ...cfg,
         agents: {
             ...cfg.agents,
@@ -962,6 +1310,18 @@ function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig): OpenClawConf
             },
         },
     };
+
+    // 模型优先级排序：activeModel 排最前，其余保持不变
+    if (activeModel && allModels && allModels.length > 0) {
+        const ordered: Record<string, {}> = {};
+        ordered[activeModel] = {};
+        for (const m of allModels) {
+            if (m !== activeModel) ordered[m] = {};
+        }
+        result.agents!.defaults!.models = ordered;
+    }
+
+    return result;
 }
 
 function buildModelProbeUrls(rawBaseUrl: string): string[] {
@@ -1030,8 +1390,19 @@ async function buildModelCatalogText(enableDynamicLookup: boolean): Promise<stri
     }
 
     const providers = parsed?.models?.providers as Record<string, any> | undefined;
+    const currentModelFromModel = (typeof parsed?.agents?.defaults?.model === "string" && parsed.agents.defaults.model.trim())
+        || (typeof parsed?.agents?.defaults?.model?.primary === "string" && parsed.agents.defaults.model.primary.trim());
+    const currentModelFromModels = (() => {
+        const modelsMap = parsed?.agents?.defaults?.models;
+        if (modelsMap && typeof modelsMap === "object") {
+            const keys = Object.keys(modelsMap).filter(k => k.includes("/"));
+            if (keys.length > 0) return keys[0];
+        }
+        return null;
+    })();
     const currentModel =
-        (typeof parsed?.agents?.defaults?.model?.primary === "string" && parsed.agents.defaults.model.primary.trim())
+        currentModelFromModel
+        || currentModelFromModels
         || (typeof parsed?.agent?.model === "string" && parsed.agent.model.trim())
         || "unknown";
     if (!providers || typeof providers !== "object") {
@@ -2463,6 +2834,127 @@ async function sendOneBotMessageWithAck(client: OneBotClient, to: string, messag
     }
 }
 
+// ── 政治言论审核 ──────────────────────────────────────
+function buildPoliticalEndpoint(baseUrl: string): string {
+    const clean = baseUrl.replace(/\/+$/, "");
+    if (clean.endsWith("/v1") || clean.endsWith("/compatible-mode/v1")) {
+        return `${clean}/chat/completions`;
+    }
+    return `${clean}/v1/chat/completions`;
+}
+
+async function checkPoliticalSpeech(
+    messageText: string,
+    modelConfig: string | undefined,
+    cfg: any,
+    timeoutMs: number = 5000,
+): Promise<{ isPolitical: boolean; reason: string }> {
+    const fetchImpl = (globalThis as any).fetch;
+    if (typeof fetchImpl !== "function") {
+        return { isPolitical: false, reason: "" };
+    }
+
+    let endpoint = "";
+    let model = "";
+    let apiKey = "";
+
+    const rawModel = typeof modelConfig === "string" ? modelConfig.trim() : "";
+    if (rawModel && rawModel.includes("/")) {
+        const [providerId, modelName] = rawModel.split("/", 2);
+        const providers = cfg?.models?.providers || {};
+        const provider = providers[providerId];
+        if (provider?.baseUrl) {
+            endpoint = buildPoliticalEndpoint(provider.baseUrl);
+            apiKey = provider.apiKey || "";
+        }
+        model = modelName;
+    }
+
+    if (!endpoint || !model) {
+        // Fallback: try primary model from agents.defaults (may be string, {primary,fallbacks}, or map)
+        const defaultModel = cfg?.agents?.defaults?.model || cfg?.agents?.defaults?.models;
+        let resolvedDefault: string | undefined;
+        if (typeof defaultModel === "string" && defaultModel.trim()) {
+            resolvedDefault = defaultModel.trim();
+        } else if (defaultModel?.primary) {
+            resolvedDefault = defaultModel.primary;
+        } else if (defaultModel && typeof defaultModel === "object") {
+            const keys = Object.keys(defaultModel).filter((k: string) => k.includes("/"));
+            if (keys.length > 0) resolvedDefault = keys[0];
+        }
+        if (resolvedDefault && resolvedDefault.includes("/")) {
+            const [providerId, modelName] = resolvedDefault.split("/", 2);
+            if (!model) model = modelName;
+            if (!endpoint) {
+                const providers = cfg?.models?.providers || {};
+                const provider = providers[providerId];
+                if (provider?.baseUrl) {
+                    endpoint = buildPoliticalEndpoint(provider.baseUrl);
+                    apiKey = provider.apiKey || "";
+                }
+            }
+        }
+    }
+
+    if (!endpoint || !model) {
+        console.warn(`[QQ-political] no model endpoint configured (explicit="${rawModel}", endpoint="${endpoint}", resolved="${model || "(none)"}")`);
+        return { isPolitical: false, reason: "" };
+    }
+
+    const systemPrompt =
+        "请判断以下用户输入是否包含政治相关言论（包括政治敏感话题、政治人物讨论、政策评论、政治事件等）。\n" +
+        "如果包含政治言论，请直接回复：是，原因：[用一句话简述原因，不超过20字]\n" +
+        "如果不包含政治言论，请只回复：不是\n" +
+        "不要输出任何其他内容。";
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const resp = await fetchImpl(endpoint, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            },
+            body: JSON.stringify({
+                model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: `请判断以下内容：\n\n${messageText}` },
+                ],
+                temperature: 0,
+                max_tokens: 64,
+            }),
+            signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        if (!resp.ok) {
+            const errText = await resp.text().catch(() => "");
+            console.warn(`[QQ-political] HTTP ${resp.status}: ${errText.slice(0, 300)}`);
+            return { isPolitical: false, reason: "" };
+        }
+
+        const data = await resp.json();
+        const content = data?.choices?.[0]?.message?.content?.trim() || "";
+
+        const isPolitical = content.startsWith("是") && !content.startsWith("不是");
+        let reason = isPolitical
+            ? content.replace(/^(是[，,：:\s]*)/, "").trim()
+            : "";
+        // Sanitize meaningless reasons like "原因" or empty
+        if (reason.length <= 2 || reason === "原因" || reason === "无原因") {
+            reason = "检测到政治言论";
+        }
+
+        return { isPolitical, reason };
+    } catch (err) {
+        console.error(`[QQ-political] check failed: ${String(err)}`);
+        return { isPolitical: false, reason: "" };
+    }
+}
+
 export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
     id: "qq",
     meta: {
@@ -2536,10 +3028,6 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                 allowBareGroupCommands: {
                     label: "允许群聊裸 slash 指令",
                     help: "默认关闭。关闭后，/model 这类群聊指令需要配合关键词触发；如果想恢复旧体验再手动开启。",
-                },
-                proactiveReplyProbability: {
-                    label: "群聊主动回复概率",
-                    help: "默认 0=关闭。设为 0.05 即 5% 概率随机回复。不受 keywordOnlyTrigger 控制，触发时自动为模型注入主动回复上下文。",
                 },
             },
         };
@@ -2756,6 +3244,8 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
             const blockedUserIds = [...new Set(parseIdListInput(config.blockedUsers as string | number | Array<string | number> | undefined))];
             const blockedNotifyCooldownMs = Math.max(0, Number(config.blockedNotifyCooldownMs ?? 10000));
 
+            const debugPoliticalModeration = config.debugPoliticalModeration === true;
+
             if (!config.wsUrl) throw new Error("QQ: wsUrl is required");
 
             const existingLiveClient = clients.get(account.accountId);
@@ -2969,6 +3459,47 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
                             }
                         }
                         if (resolvedText) text = resolvedText;
+                    }
+
+                    // ── 政治言论审核 ──
+                    if (config.politicalModeration === true && isGroup && text.trim()) {
+                        const politicalResult = await checkPoliticalSpeech(
+                            text.trim(),
+                            config.politicalModerationModel as string | undefined,
+                            cfg,
+                            config.politicalModerationTimeoutMs ?? 5000,
+                        );
+                        if (debugPoliticalModeration) {
+                            console.log(`[QQ-political] check start group=${groupId} user=${userId} len=${text.length} model=${config.politicalModerationModel || "(main)"}`);
+                            console.log(`[QQ-political] response: "${politicalResult.reason || politicalResult.isPolitical}" isPolitical=${politicalResult.isPolitical}`);
+                        }
+                        if (politicalResult.isPolitical) {
+                            console.log(`[QQ-political] DETECTED group=${groupId} user=${userId} reason="${politicalResult.reason}"`);
+
+                            if (event.message_id) {
+                                client.deleteMsg(event.message_id);
+                                if (debugPoliticalModeration) {
+                                    console.log(`[QQ-political] deleted message_id=${event.message_id}`);
+                                }
+                            }
+
+                            const groupKey = `${account.accountId}:${groupId}`;
+                            const now = Date.now();
+                            const cooldownMs = config.politicalModerationCooldownMs ?? 60000;
+                            const lastAnnounced = politicalModerationCooldown.get(groupKey) || 0;
+
+                            if (now - lastAnnounced >= cooldownMs) {
+                                politicalModerationCooldown.set(groupKey, now);
+                                client.sendGroupMsg(groupId, `触发撤回：原因是${politicalResult.reason}`);
+                                console.log(`[QQ-political] sent reason to group=${groupId}`);
+                            } else {
+                                if (debugPoliticalModeration) {
+                                    console.log(`[QQ-political] silent delete (cooldown, ${cooldownMs - (now - lastAnnounced)}ms remaining)`);
+                                }
+                            }
+
+                            return;
+                        }
                     }
 
                     if (blockedUserIds.includes(userId)) return;
@@ -3429,18 +3960,34 @@ ${current}
                         }
                     }
 
-                    let mentionedByAt = false;
-                    let mentionedByReply = false;
-
-                    // 主动回复: 概率触发，不受 keywordOnlyTrigger 限制
-                    const proactiveProbability = Number(config.proactiveReplyProbability);
-                    if (isGroup && !isTriggered && proactiveProbability > 0 && proactiveProbability <= 1) {
-                        if (Math.random() < proactiveProbability) {
-                            isTriggered = true;
+                    // 生图关键词匹配也视为触发（群聊不@也能直接生效）
+                    if (!isTriggered && config.imageGenKeywords?.trim()) {
+                        const genCleaned = text.trim()
+                            .replace(/^\[CQ:[^\]]+\]\s*/, "")
+                            .replace(/^@\S+\s*/, "")
+                            .trim();
+                        const genKwList = config.imageGenKeywords.split(",").map(k => k.trim()).filter(k => k);
+                        for (const kw of genKwList) {
+                            if (genCleaned.includes(kw)) {
+                                isTriggered = true;
+                                break;
+                            }
                         }
                     }
 
+                    let mentionedByAt = false;
+                    let mentionedByReply = false;
+
                     const checkMention = isGroup || isGuild;
+                    if (!isTriggered && checkMention && config.proactiveReplyProbability > 0) {
+                        const roll = Math.random();
+                        if (roll < config.proactiveReplyProbability) {
+                            isTriggered = true;
+                            console.log(`[QQ-proactive] HIT roll=${roll.toFixed(4)} prob=${config.proactiveReplyProbability} user=${userId} group=${groupId || "-"} msg="${text.slice(0, 80)}"`);
+                        } else {
+                            console.log(`[QQ-proactive] MISS roll=${roll.toFixed(4)} prob=${config.proactiveReplyProbability} user=${userId} group=${groupId || "-"} msg="${text.slice(0, 80)}"`);
+                        }
+                    }
                     if (keywordOnlyTrigger && !isTriggered) return;
                     if (checkMention && config.requireMention && !keywordOnlyTrigger && !isTriggered) {
                         const selfId = client.getSelfId();
@@ -3616,7 +4163,7 @@ ${current}
                         for (let i = 0; i < chunks.length; i++) {
                             if (currentRunState?.isStale()) return i > 0;
                             let chunk = chunks[i];
-                            if (isGroup && i === 0) chunk = `${chunk}`;
+                            if (isGroup && i === 0 && config.atSenderInGroupReply) chunk = `[CQ:at,qq=${userId}] ${chunk}`;
 
                             if (isGroup) client.sendGroupMsg(groupId, chunk);
                             else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunk);
@@ -3868,10 +4415,106 @@ ${current}
                         ...imageHints,
                         ...layeredContext.imageUrls,
                     ])).slice(0, 5);
+                    if (config.cacheInboundImagesToLocal === false && inboundMediaUrls.length > 0) return;
                     const cachedInboundImages = config.cacheInboundImagesToLocal !== false
                         ? await cacheImageHintsLocally(inboundMediaUrls, imageHintMeta)
                         : { entries: inboundMediaUrls.map((url) => ({ url, type: imageHintMeta.get(url)?.mimeType ?? inferImageMimeType(url) ?? DEFAULT_QQ_IMAGE_MIME })), failures: [] as Array<{ url: string; error: string }> };
                     const inboundMediaPayload = buildInboundMediaPayloadFromEntries(cachedInboundImages.entries);
+
+                    // ── 生图功能（优先于识图模块） ─────────────────────────────
+                    const imageGenMatch = config.enableImageGen !== false &&
+                        config.imageGenModel?.trim() &&
+                        detectImageGenRequest(text.trim(), config.imageGenKeywords || "生图:,画:,绘图:");
+                    if (imageGenMatch) {
+                        try {
+                            // 获取图片 URL（最多 3 张）
+                            const imageUrls = cachedInboundImages.entries
+                                .filter(e => e.url)
+                                .slice(0, 3)
+                                .map(e => e.url as string);
+
+                            const isImageToImage = imageUrls.length > 0;
+                            const modeTag = isImageToImage ? `图生图 (${imageUrls.length}张)` : "文生图";
+                            console.log(`[QQ-imagegen] triggered by user=${userId} ${modeTag} prompt="${imageGenMatch.prompt}"`);
+
+                            const providers = (cfg as any)?.models?.providers || {};
+                            const result = await callImageGenerationAPI({
+                                prompt: imageGenMatch.prompt,
+                                quality: imageGenMatch.quality,
+                                size: imageGenMatch.size,
+                                style: imageGenMatch.style,
+                                model: config.imageGenModel!,
+                                endpoint: config.imageGenEndpoint,
+                                apiKey: config.imageGenApiKey,
+                                images: isImageToImage ? imageUrls : undefined,
+                            }, config, providers);
+                            const imageMsg = `[CQ:image,file=${result.imageUrl}]`;
+                            if (isGroup) {
+                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] ${imageMsg}`);
+                            } else if (isGuild) {
+                                client.sendGuildChannelMsg(guildId, channelId, imageMsg);
+                            } else {
+                                client.sendPrivateMsg(userId, imageMsg);
+                            }
+                            console.log(`[QQ-imagegen] success url=${result.imageUrl}`);
+                            return;
+                        } catch (err) {
+                            console.error("[QQ-imagegen] failed:", err);
+                            const errorMsg = `⚠️ 生图失败: ${err instanceof Error ? err.message : String(err)}`;
+                            if (isGroup) {
+                                client.sendGroupMsg(groupId, `[CQ:at,qq=${userId}] ${errorMsg}`);
+                            } else {
+                                client.sendPrivateMsg(userId, errorMsg);
+                            }
+                            return;
+                        }
+                    }
+                    // ── END 生图功能 ─────────────────────────
+
+                    // ── 独立识图模块 ──────────────────────────
+                    const visionModelRaw = config.visionModel || "";
+                    // 非触发的群/频道消息：尊重 proactiveReplyProbability 主动回复概率
+                    let skipVisionByProactive = false;
+                    if ((isGroup || isGuild) && !isTriggered) {
+                        const prob = config.proactiveReplyProbability ?? 0;
+                        if (prob <= 0 || Math.random() >= prob) {
+                            skipVisionByProactive = true;
+                        } else {
+                            console.log(`[QQ-vision-proactive] random hit prob=${prob} user=${userId} group=${groupId || "-"}`);
+                        }
+                    }
+                    if (visionModelRaw && cachedInboundImages.entries.some(e => e.path) && !skipVisionByProactive) {
+                        const cachedPaths = cachedInboundImages.entries
+                            .filter(e => e.path)
+                            .map(e => e.path as string);
+                        const providers = (cfg as any)?.models?.providers || {};
+                        const { describeImages } = await import("./vision.js");
+                        const result = await describeImages({
+                            imagePaths: cachedPaths,
+                            visionModelRaw,
+                            visionPrompt: config.visionModelPrompt || "请详细描述图片内容",
+                            visionRateLimitMs: config.visionRateLimitMs ?? 0,
+                            providers,
+                        });
+                        if (result.description) {
+                            console.log(`[QQ-vision] delivering ${result.description.length} chars directly, skipping main model`);
+                            // 尊重 rateLimitMs 延迟
+                            const rateLimit = config.rateLimitMs ?? 1000;
+                            if (rateLimit > 0) await sleep(rateLimit);
+                            // 直接发送识图描述，不走主模型
+                            const chunks = splitMessage(result.description, config.maxMessageLength ?? 4000);
+                            for (let ci = 0; ci < chunks.length; ci++) {
+                                if (ci > 0 && rateLimit > 0) await sleep(rateLimit);
+                                if (isGroup) client.sendGroupMsg(groupId, chunks[ci]);
+                                else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, chunks[ci]);
+                                else client.sendPrivateMsg(userId, chunks[ci]);
+                            }
+                            return; // 跳过主模型 dispatch，直接结束消息处理
+                        }
+                        console.log(`[QQ-vision] no description: ${result.error || "unknown"}, falling through to main model`);
+                    }
+                    // ── END 独立识图模块 ──────────────────────
+
                     if (config.debugLayerTrace) {
                         const mediaPathCount = Array.isArray((inboundMediaPayload as any).MediaPaths)
                             ? (inboundMediaPayload as any).MediaPaths.length
@@ -3956,14 +4599,22 @@ ${current}
                         try {
                             const matchedAgentId = route.agentId;
                             const matchedAgentConfig = ((cfg as any).agents?.list || []).find((a: any) => a.id === matchedAgentId);
-                            // OpenClaw accepts either "provider/model" or
-                            // { primary, fallbacks } for agent model config.
+                            // OpenClaw accepts either "provider/model", or
+                            // { primary, fallbacks }, or the newer { "provider/model": {} } map.
                             const normalizeModelConfig = (value: any) => {
                                 if (typeof value === "string") {
                                     const primary = value.trim();
                                     return primary ? { primary, fallbacks: [] as string[] } : undefined;
                                 }
                                 if (!value || typeof value !== "object") {
+                                    return undefined;
+                                }
+                                // Handle { "provider/model": {...}, ... } maps format
+                                if (!("primary" in value) && !("fallbacks" in value)) {
+                                    const modelKeys = Object.keys(value).filter(k => k.includes("/"));
+                                    if (modelKeys.length > 0) {
+                                        return { primary: modelKeys[0], fallbacks: modelKeys.slice(1) };
+                                    }
                                     return undefined;
                                 }
                                 const primary = typeof value.primary === "string" ? value.primary.trim() : "";
@@ -3978,12 +4629,28 @@ ${current}
                                 return { primary, fallbacks };
                             };
                             const rawModelConfig =
-                                normalizeModelConfig(matchedAgentConfig?.model) ||
-                                normalizeModelConfig((cfg as any).agents?.defaults?.model) ||
+                                normalizeModelConfig(matchedAgentConfig?.model || matchedAgentConfig?.models) ||
+                                normalizeModelConfig((cfg as any).agents?.defaults?.model || (cfg as any).agents?.defaults?.models) ||
                                 { primary: "", fallbacks: [] as string[] };
-                            const fallbacks = rawModelConfig.fallbacks;
 
-                            const modelsToTry = [null, ...fallbacks];
+                            // ── QQ config 模型回退队列 ──────────────────────
+                            const allModelKeys = Object.keys((cfg as any)?.agents?.defaults?.models || {});
+                            const qqPrimary = config.primaryModel?.trim() || rawModelConfig.primary || allModelKeys[0] || "";
+                            const configuredFallbackList = (config.fallbackModels || "")
+                                .split(",").map(s => s.trim()).filter(s => s && allModelKeys.includes(s) && s !== qqPrimary);
+                            const remainingModels = allModelKeys.filter(m => m !== qqPrimary && !configuredFallbackList.includes(m));
+                            // Fisher-Yates 随机打乱剩余模型
+                            for (let i = remainingModels.length - 1; i > 0; i--) {
+                                const j = Math.floor(Math.random() * (i + 1));
+                                [remainingModels[i], remainingModels[j]] = [remainingModels[j], remainingModels[i]];
+                            }
+                            const qqFallbacks = [...configuredFallbackList, ...remainingModels];
+                            const modelPoolSize = 1 + qqFallbacks.length;
+                            console.log(`[QQ-model] primary=${qqPrimary} explicitFallbacks=[${configuredFallbackList}] randomFallbacks=[${remainingModels}] totalPool=${modelPoolSize}`);
+                            // ── END 模型回退队列 ──────────────────────────
+
+                            const fallbacks = qqFallbacks.length > 0 ? qqFallbacks : rawModelConfig.fallbacks;
+                            const modelsToTry = [qqPrimary || null, ...fallbacks];
                             let globalDispatchError: any = null;
 
                             out_loop:
@@ -3997,13 +4664,16 @@ ${current}
                                 }
 
                                 if (!modelToTest) {
-                                    globalDispatchError = new Error("[QQ] No model resolved for this route; check agents.<id>.model or agents.defaults.model");
+                                    globalDispatchError = new Error("[QQ] No model resolved for this route; check agents.<id>.model, agents.defaults.model, or agents.defaults.models");
                                     console.error(globalDispatchError);
                                     break out_loop;
                                 }
 
+                                if (modelIndex === 0) {
+                                    console.log(`[QQ-model] attempting ${modelToTest} (1/${modelsToTry.length})`);
+                                }
                                 if (modelIndex > 0) {
-                                    console.log(`[QQ] Failover triggered: Switching to fallback model ${modelToTest}`);
+                                    console.log(`[QQ-model] failover to ${modelToTest} (${modelIndex + 1}/${modelsToTry.length})`);
                                     if (config.enableErrorNotify !== false) {
                                         const notifyMsg = `⏳ 当前服务无响应，正尝试切换至备用线路 ${modelIndex}/${fallbacks.length}...`;
                                         if (isGroup) client.sendGroupMsg(groupId, notifyMsg);
@@ -4012,17 +4682,18 @@ ${current}
                                     }
                                 }
 
+                                const remainingModels = modelsToTry.slice(modelIndex + 1).filter(Boolean) as string[];
                                 currentCfg = {
                                     ...(cfg as any),
                                     agents: {
                                         ...((cfg as any).agents || {}),
                                         defaults: {
                                             ...((cfg as any).agents?.defaults || {}),
-                                            model: { primary: modelToTest, fallbacks: [] }
+                                            model: { primary: modelToTest, fallbacks: remainingModels }
                                         },
                                         list: ((cfg as any).agents?.list || []).map((a: any) => {
                                             if (a.id === matchedAgentId) {
-                                                return { ...a, model: { primary: modelToTest, fallbacks: [] } };
+                                                return { ...a, model: { primary: modelToTest, fallbacks: remainingModels } };
                                             }
                                             return a;
                                         })
@@ -4121,6 +4792,7 @@ ${current}
 
                                         if (tryCount === maxRetries) {
                                                 if (modelIndex === modelsToTry.length - 1 && !runState.isStale()) {
+                                                    console.log(`[QQ-model] all ${modelsToTry.length} models exhausted`);
                                                     if (globalDispatchError) {
                                                         const errMessage = (globalDispatchError instanceof Error) ? globalDispatchError.message : String(globalDispatchError);
                                                         const notifyMsg = errMessage.trim() ? `⚠️ 服务调用失败: ${errMessage}` : "⚠️ 服务调用失败，无具体错误信息，请稍后重试。";
