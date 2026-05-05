@@ -1454,7 +1454,7 @@ function parseImageGenResponse(
 }
 
 function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig, activeModel?: string, allModels?: string[]): OpenClawConfig {
-    const blockStreaming = config.blockStreaming ?? false;
+    const blockStreaming = config.blockStreaming ?? true;
     const blockStreamingBreak = config.blockStreamingBreak ?? "message_end";
 
     const result: OpenClawConfig = {
@@ -5170,7 +5170,7 @@ ${current}
                                             resetBufferedFinalTexts();
                                             resetBufferedUnknownTexts();
                                             const replyCfg = buildQQReplyConfig(currentCfg as OpenClawConfig, config);
-                                            console.log(`[QQ-dispatch] model=${JSON.stringify((replyCfg as any).agents?.defaults?.model)} modelsKeys=${JSON.stringify(Object.keys((replyCfg as any).agents?.defaults?.models || {}))} blockStreaming=${(replyCfg as any).agents?.defaults?.blockStreamingDefault} blockStreamingBreak=${(replyCfg as any).agents?.defaults?.blockStreamingBreak}`);
+                                            console.log(`[QQ-dispatch] chatType=${mergedCtx.ChatType} bodyLen=${(mergedCtx.Body || "").length} model=${JSON.stringify((replyCfg as any).agents?.defaults?.model)} blockStreaming=${(replyCfg as any).agents?.defaults?.blockStreamingDefault} blockStreamingBreak=${(replyCfg as any).agents?.defaults?.blockStreamingBreak}`);
                                             dispatchResult = await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
                                                 ctx: mergedCtx,
                                                 cfg: replyCfg,
