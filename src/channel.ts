@@ -1454,7 +1454,7 @@ function parseImageGenResponse(
 }
 
 function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig, activeModel?: string, allModels?: string[]): OpenClawConfig {
-    const blockStreaming = config.blockStreaming ?? true;
+    const blockStreaming = config.blockStreaming ?? false;
     const blockStreamingBreak = config.blockStreamingBreak ?? "message_end";
 
     const result: OpenClawConfig = {
