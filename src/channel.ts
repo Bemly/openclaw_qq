@@ -4535,6 +4535,7 @@ ${current}
                     // be false even though a real reply is already queued/sending. Do not send
                     // the empty-reply fallback in that case.
                     let sawReplyContent = false;
+                    let deliverCallCount = 0;
                     let dispatcherError: any = null;
                     let currentRunState: { isStale: () => boolean } | null = null;
                     const forwardThreshold = Number(config.forwardLongReplyThreshold ?? 0);
@@ -4711,6 +4712,7 @@ ${current}
 
                     const deliver = async (payload: any, info?: { kind?: string }) => {
                         if (currentRunState?.isStale()) return;
+                        deliverCallCount++;
                         const isTextFailure = payload.text && (
                             payload.text.includes("Agent failed before reply:") ||
                             payload.text.includes("Context overflow") ||
@@ -5148,6 +5150,7 @@ ${current}
                                         break out_loop;
                                     }
                                     deliveredAnything = false;
+                                    deliverCallCount = 0;
                                     globalDispatchError = null;
                                     dispatcherError = null;
                                     try {
@@ -5180,14 +5183,19 @@ ${current}
                                                 replyOptions: {},
                                             });
                                             if (!runState.isStale()) {
-                                                console.log(`[QQ] dispatch result queuedFinal=${String(Boolean(dispatchResult?.queuedFinal))} counts=${JSON.stringify(dispatchResult?.counts || {})} session=${route.sessionKey}`);
+                                            const totalDispatched = (dispatchResult?.counts?.tool || 0) + (dispatchResult?.counts?.block || 0) + (dispatchResult?.counts?.final || 0);
+                                            console.log(`[QQ] dispatch result queuedFinal=${String(Boolean(dispatchResult?.queuedFinal))} counts=${JSON.stringify(dispatchResult?.counts || {})} totalDispatched=${totalDispatched} duration=${dispatchDurationMs}ms model=${modelToTest} deliverCalls=${deliverCallCount} session=${route.sessionKey}`);
+                                            if (totalDispatched === 0 && deliverCallCount === 0 && dispatchDurationMs >= 500) {
+                                                console.log(`[QQ] WARNING: model ${modelToTest} returned zero output in ${dispatchDurationMs}ms — model may be down or returning empty`);
                                             }
+                                        }
                                         } catch (err) {
                                             globalDispatchError = err;
                                             console.error(`[QQ] Error during buffered reply dispatch (attempt ${tryCount + 1}/${maxRetries + 1}):`, err);
                                         }
                                         const dispatchDurationMs = Date.now() - dispatchStartTime;
                                         if (runState.isStale()) {
+                                            console.log(`[QQ] dispatch became stale after ${dispatchDurationMs}ms model=${modelToTest}, breaking out`);
                                             break out_loop;
                                         }
 
