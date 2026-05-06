@@ -1466,6 +1466,13 @@ function buildQQReplyConfig(cfg: OpenClawConfig, config: QQConfig, activeModel?:
                 ...(blockStreaming ? { blockStreamingDefault: "on", blockStreamingBreak } : {}),
             },
         },
+        messages: {
+            ...((cfg as any).messages || {}),
+            groupChat: {
+                ...(((cfg as any).messages?.groupChat as Record<string, unknown>) || {}),
+                visibleReplies: "automatic",
+            },
+        },
         channels: {
             ...cfg.channels,
             qq: {
