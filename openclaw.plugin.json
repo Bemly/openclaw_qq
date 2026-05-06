@@ -10,7 +10,332 @@
       "schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
-        "properties": {}
+        "properties": {
+          "wsUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "admins": {
+            "default": "",
+            "type": "string"
+          },
+          "requireMention": {
+            "default": true,
+            "type": "boolean"
+          },
+          "systemPrompt": {
+            "type": "string"
+          },
+          "enableDeduplication": {
+            "default": true,
+            "type": "boolean"
+          },
+          "enableErrorNotify": {
+            "default": true,
+            "type": "boolean"
+          },
+          "adminOnlyChat": {
+            "default": false,
+            "type": "boolean"
+          },
+          "notifyNonAdminBlocked": {
+            "default": false,
+            "type": "boolean"
+          },
+          "nonAdminBlockedMessage": {
+            "default": "",
+            "type": "string"
+          },
+          "blockedNotifyCooldownMs": {
+            "default": 10000,
+            "type": "number"
+          },
+          "enableEmptyReplyFallback": {
+            "default": true,
+            "type": "boolean"
+          },
+          "emptyReplyFallbackText": {
+            "default": "",
+            "type": "string"
+          },
+          "maxRetries": {
+            "default": 0,
+            "type": "number"
+          },
+          "retryDelayMs": {
+            "default": 3000,
+            "type": "number"
+          },
+          "fastFailErrors": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "showProcessingStatus": {
+            "default": true,
+            "type": "boolean"
+          },
+          "showReplySessionSource": {
+            "default": true,
+            "type": "boolean"
+          },
+          "processingStatusDelayMs": {
+            "default": 500,
+            "type": "number"
+          },
+          "processingStatusIntervalMs": {
+            "default": 0,
+            "type": "number"
+          },
+          "processingStatusText": {
+            "default": "输入中",
+            "type": "string"
+          },
+          "processingPulseText": {
+            "default": "",
+            "type": "string"
+          },
+          "autoApproveRequests": {
+            "default": false,
+            "type": "boolean"
+          },
+          "maxMessageLength": {
+            "default": 4000,
+            "type": "number"
+          },
+          "formatMarkdown": {
+            "default": false,
+            "type": "boolean"
+          },
+          "antiRiskMode": {
+            "default": false,
+            "type": "boolean"
+          },
+          "allowedGroups": {
+            "default": "",
+            "type": "string"
+          },
+          "blockedUsers": {
+            "default": "",
+            "type": "string"
+          },
+          "historyLimit": {
+            "default": 0,
+            "type": "number"
+          },
+          "keywordOnlyTrigger": {
+            "default": false,
+            "type": "boolean"
+          },
+          "keywordTriggers": {
+            "default": "",
+            "type": "string"
+          },
+          "allowBareGroupCommands": {
+            "default": false,
+            "type": "boolean"
+          },
+          "enableDynamicModelCatalog": {
+            "default": false,
+            "type": "boolean"
+          },
+          "enableTTS": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sharedMediaHostDir": {
+            "default": "",
+            "type": "string"
+          },
+          "sharedMediaContainerDir": {
+            "default": "/openclaw_media",
+            "type": "string"
+          },
+          "enableGuilds": {
+            "default": true,
+            "type": "boolean"
+          },
+          "enrichReplyForwardContext": {
+            "default": true,
+            "type": "boolean"
+          },
+          "cacheInboundImagesToLocal": {
+            "default": true,
+            "type": "boolean"
+          },
+          "visionModel": {
+            "default": "",
+            "type": "string"
+          },
+          "visionModelPrompt": {
+            "default": "",
+            "type": "string"
+          },
+          "visionRateLimitMs": {
+            "default": 0,
+            "type": "number"
+          },
+          "blockStreaming": {
+            "default": true,
+            "type": "boolean"
+          },
+          "blockStreamingBreak": {
+            "default": "message_end",
+            "type": "string",
+            "enum": [
+              "text_end",
+              "message_end"
+            ]
+          },
+          "maxReplyLayers": {
+            "default": 5,
+            "type": "number"
+          },
+          "maxForwardLayers": {
+            "default": 5,
+            "type": "number"
+          },
+          "maxForwardMessagesPerLayer": {
+            "default": 8,
+            "type": "number"
+          },
+          "maxCharsPerLayer": {
+            "default": 900,
+            "type": "number"
+          },
+          "maxTotalContextChars": {
+            "default": 3000,
+            "type": "number"
+          },
+          "includeSenderInLayers": {
+            "default": true,
+            "type": "boolean"
+          },
+          "includeCurrentOutline": {
+            "default": true,
+            "type": "boolean"
+          },
+          "rateLimitMs": {
+            "default": 1000,
+            "type": "number"
+          },
+          "enableQueueNotify": {
+            "default": true,
+            "type": "boolean"
+          },
+          "queueDebounceMs": {
+            "default": 0,
+            "type": "number"
+          },
+          "injectGatewayMeta": {
+            "default": false,
+            "type": "boolean"
+          },
+          "interruptOnNewMessage": {
+            "default": false,
+            "type": "boolean"
+          },
+          "forwardLongReplyThreshold": {
+            "default": 300,
+            "type": "number"
+          },
+          "forwardNodeCharLimit": {
+            "default": 0,
+            "type": "number"
+          },
+          "forwardNodeName": {
+            "default": "OpenClaw",
+            "type": "string"
+          },
+          "atSenderInGroupReply": {
+            "default": false,
+            "type": "boolean"
+          },
+          "proactiveReplyProbability": {
+            "default": 0,
+            "type": "number"
+          },
+          "imageGenModel": {
+            "default": "",
+            "type": "string"
+          },
+          "imageGenKeywords": {
+            "type": "string"
+          },
+          "enableImageGen": {
+            "default": true,
+            "type": "boolean"
+          },
+          "imageGenEndpoint": {
+            "type": "string"
+          },
+          "imageGenApiKey": {
+            "type": "string"
+          },
+          "imageGenQuality": {
+            "default": "standard",
+            "type": "string",
+            "enum": [
+              "standard",
+              "hd"
+            ]
+          },
+          "imageGenSize": {
+            "default": "1024x1024",
+            "type": "string"
+          },
+          "imageGenStyle": {
+            "default": "vivid",
+            "type": "string",
+            "enum": [
+              "vivid",
+              "natural"
+            ]
+          },
+          "imageGenRateLimitMs": {
+            "default": 0,
+            "type": "number"
+          },
+          "imageGenAsyncMode": {
+            "default": true,
+            "type": "boolean"
+          },
+          "politicalModeration": {
+            "default": false,
+            "type": "boolean"
+          },
+          "politicalModerationCooldownMs": {
+            "default": 60000,
+            "type": "number"
+          },
+          "politicalModerationModel": {
+            "default": "",
+            "type": "string"
+          },
+          "politicalModerationTimeoutMs": {
+            "default": 5000,
+            "type": "number"
+          },
+          "debugPoliticalModeration": {
+            "default": false,
+            "type": "boolean"
+          },
+          "primaryModel": {
+            "default": "",
+            "type": "string"
+          },
+          "fallbackModels": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": ["wsUrl"],
+        "additionalProperties": true
       }
     }
   },
