@@ -336,6 +336,314 @@
         },
         "required": ["wsUrl"],
         "additionalProperties": true
+      },
+      "uiHints": {
+        "channels.qq.wsUrl": {
+          "label": "WebSocket 地址",
+          "help": "OneBot 服务端地址，示例：ws://127.0.0.1:3001"
+        },
+        "channels.qq.accessToken": {
+          "label": "Access Token",
+          "help": "OneBot 访问令牌，需与 NapCat/OneBot 配置一致",
+          "sensitive": true
+        },
+        "channels.qq.admins": {
+          "label": "管理员 QQ 号",
+          "help": "逗号分隔，如 10001,123456789"
+        },
+        "channels.qq.requireMention": {
+          "label": "群聊需 @ 触发",
+          "help": "开启后群聊需 @机器人 或回复机器人消息才会触发"
+        },
+        "channels.qq.systemPrompt": {
+          "label": "系统提示词",
+          "help": "自定义系统提示词"
+        },
+        "channels.qq.enableDeduplication": {
+          "label": "启用消息去重",
+          "help": "避免重复回复同一消息"
+        },
+        "channels.qq.enableErrorNotify": {
+          "label": "错误提示",
+          "help": "调用失败时通知用户"
+        },
+        "channels.qq.adminOnlyChat": {
+          "label": "仅管理员可触发",
+          "help": "开启后非管理员无法使用机器人"
+        },
+        "channels.qq.notifyNonAdminBlocked": {
+          "label": "拦截非管理员提示",
+          "help": "非管理员触发时是否告知无权限"
+        },
+        "channels.qq.nonAdminBlockedMessage": {
+          "label": "非管理员拦截提示文案",
+          "help": "自定义无权限时的回复内容"
+        },
+        "channels.qq.blockedNotifyCooldownMs": {
+          "label": "拦截提示冷却（毫秒）",
+          "help": "同一用户拦截提示的最小间隔"
+        },
+        "channels.qq.enableEmptyReplyFallback": {
+          "label": "空回复兜底",
+          "help": "模型返回空内容时自动给出提示"
+        },
+        "channels.qq.emptyReplyFallbackText": {
+          "label": "空回复兜底文案",
+          "help": "模型返回空内容时的提示文本"
+        },
+        "channels.qq.maxRetries": {
+          "label": "自动重试次数",
+          "help": "默认 0（关闭）。模型报错或返回空内容时，最多再试几次；次数越大越稳，但等待也会更久。"
+        },
+        "channels.qq.retryDelayMs": {
+          "label": "重试间隔（毫秒）",
+          "help": "默认预置 3000ms；仅在自动重试次数大于 0 时生效。"
+        },
+        "channels.qq.fastFailErrors": {
+          "label": "快速跳过错误关键词",
+          "help": "默认关闭（空数组）。填写如 401、Unauthorized、余额不足 后，命中时会直接跳过当前模型。"
+        },
+        "channels.qq.showProcessingStatus": {
+          "label": "忙碌状态可视化",
+          "help": "开启后处理任务时临时改群名片为\"(输入中)\""
+        },
+        "channels.qq.showReplySessionSource": {
+          "label": "回复前标注来源会话",
+          "help": "默认开启。回复前会自动加上 (from 主会话) 或 (from 会话xxx)，适合用了 /临时 之后分辨上下文。"
+        },
+        "channels.qq.processingStatusDelayMs": {
+          "label": "忙碌状态延迟（毫秒）",
+          "help": "触发\"输入中\"群名片后缀的延迟"
+        },
+        "channels.qq.processingStatusText": {
+          "label": "忙碌后缀文本",
+          "help": "默认\"输入中\""
+        },
+        "channels.qq.autoApproveRequests": {
+          "label": "自动通过请求",
+          "help": "自动通过好友申请/群邀请"
+        },
+        "channels.qq.maxMessageLength": {
+          "label": "单条消息最大长度",
+          "help": "超出后自动分段发送"
+        },
+        "channels.qq.formatMarkdown": {
+          "label": "Markdown 转纯文本",
+          "help": "把 Markdown 转纯文本，QQ 显示更清晰"
+        },
+        "channels.qq.antiRiskMode": {
+          "label": "风控规避模式",
+          "help": "例如处理 URL 发送样式"
+        },
+        "channels.qq.allowedGroups": {
+          "label": "群号白名单",
+          "help": "允许响应的群号，逗号/空格分隔"
+        },
+        "channels.qq.blockedUsers": {
+          "label": "用户黑名单",
+          "help": "屏蔽指定用户，逗号分隔"
+        },
+        "channels.qq.historyLimit": {
+          "label": "群历史注入条数",
+          "help": "默认 0（推荐）。需强保留原文时可设 3~5"
+        },
+        "channels.qq.keywordOnlyTrigger": {
+          "label": "群聊仅关键词触发",
+          "help": "开启后会忽略 @ 和回复触发；群聊里只有命中关键词才会触发。"
+        },
+        "channels.qq.keywordTriggers": {
+          "label": "触发关键词",
+          "help": "逗号分隔，如 \"小助手, 帮我\"。requireMention=true 时可不@直接触发"
+        },
+        "channels.qq.allowBareGroupCommands": {
+          "label": "允许群聊裸 slash 指令",
+          "help": "默认关闭。关闭后，/model 这类群聊指令需要配合关键词触发；如果想恢复旧体验再手动开启。"
+        },
+        "channels.qq.enableDynamicModelCatalog": {
+          "label": "动态模型目录",
+          "help": "开启后 /model 主动探测各 provider 全量模型"
+        },
+        "channels.qq.enableTTS": {
+          "label": "语音回复",
+          "help": "需 OneBot 服务端支持"
+        },
+        "channels.qq.sharedMediaHostDir": {
+          "label": "宿主机共享媒体目录",
+          "help": "供 NapCat 容器访问的宿主机路径"
+        },
+        "channels.qq.sharedMediaContainerDir": {
+          "label": "容器内共享目录",
+          "help": "共享目录在 NapCat 容器内的挂载路径"
+        },
+        "channels.qq.enableGuilds": {
+          "label": "启用 QQ 频道",
+          "help": "是否启用 QQ 频道（Guild）支持"
+        },
+        "channels.qq.enrichReplyForwardContext": {
+          "label": "解析 reply/forward 多层上下文",
+          "help": "默认开启。会递归展开引用和合并转发内容，方便模型理解'你在回谁、上下文是什么'。"
+        },
+        "channels.qq.cacheInboundImagesToLocal": {
+          "label": "缓存图片到本地",
+          "help": "将消息中的图片缓存到本地，便于多模态 agent 读图"
+        },
+        "channels.qq.visionModel": {
+          "label": "独立识图模型",
+          "help": "格式 provider/model，如 bailian/qwen-vl-max。配了就用独立识图"
+        },
+        "channels.qq.visionModelPrompt": {
+          "label": "识图提示词",
+          "help": "发给视觉模型的提示词"
+        },
+        "channels.qq.visionRateLimitMs": {
+          "label": "识图速率限制（毫秒）",
+          "help": "两次识图 API 调用最小间隔"
+        },
+        "channels.qq.blockStreaming": {
+          "label": "按消息分块发送",
+          "help": "默认开启。推荐保留开启，让 commentary / final 按完整 assistant message 落地，不再只等最后一条最终回复。"
+        },
+        "channels.qq.blockStreamingBreak": {
+          "label": "分块发送边界",
+          "help": "默认 message_end。每条 assistant message 完成后再发，更适合 QQ 群聊，也能减少工具调用前后的边界丢失。"
+        },
+        "channels.qq.maxReplyLayers": {
+          "label": "Reply 最大递归层数",
+          "help": "默认 5"
+        },
+        "channels.qq.maxForwardLayers": {
+          "label": "Forward 最大递归层数",
+          "help": "默认 5"
+        },
+        "channels.qq.maxForwardMessagesPerLayer": {
+          "label": "每层 Forward 最多展开条数",
+          "help": "默认 8"
+        },
+        "channels.qq.maxCharsPerLayer": {
+          "label": "每层注入最大字符数",
+          "help": "默认 900"
+        },
+        "channels.qq.maxTotalContextChars": {
+          "label": "reply/forward 总注入上限",
+          "help": "默认 3000"
+        },
+        "channels.qq.includeSenderInLayers": {
+          "label": "层级上下文包含发送者",
+          "help": "是否在每层上下文中包含昵称/ID"
+        },
+        "channels.qq.includeCurrentOutline": {
+          "label": "注入当前消息概要",
+          "help": "是否注入当前消息概要层"
+        },
+        "channels.qq.rateLimitMs": {
+          "label": "多段消息发送间隔",
+          "help": "建议 1000ms"
+        },
+        "channels.qq.enableQueueNotify": {
+          "label": "合并队列提示",
+          "help": "消息进入防抖合并队列时是否提示"
+        },
+        "channels.qq.queueDebounceMs": {
+          "label": "同会话消息合并窗口（毫秒）",
+          "help": "默认 0（关闭）。大于 0 时，短时间连续发来的多条消息会先合并再处理。"
+        },
+        "channels.qq.injectGatewayMeta": {
+          "label": "注入隐藏 QQ 网关上下文",
+          "help": "默认关闭。开启后会给模型注入不可见的会话来源/触发方式等上下文。"
+        },
+        "channels.qq.interruptOnNewMessage": {
+          "label": "新消息打断旧回复",
+          "help": "默认关闭。同一会话里来了更新的消息时，可优先切换去处理新消息。"
+        },
+        "channels.qq.forwardLongReplyThreshold": {
+          "label": "长回复转合并转发阈值",
+          "help": "final_answer 大于这个字符数时，自动改用 QQ 合并转发发送。默认 300；commentary 仍按普通消息发送。"
+        },
+        "channels.qq.forwardNodeCharLimit": {
+          "label": "转发节点字符上限",
+          "help": "每个转发节点最大字符数，默认 0=不拆分"
+        },
+        "channels.qq.forwardNodeName": {
+          "label": "转发节点昵称",
+          "help": "合并转发中的节点显示昵称"
+        },
+        "channels.qq.atSenderInGroupReply": {
+          "label": "群聊回复艾特发送者",
+          "help": "群聊回复时在第一条消息前 @发送者"
+        },
+        "channels.qq.proactiveReplyProbability": {
+          "label": "主动回复概率",
+          "help": "0~1，默认 0=关闭。与关键词触发共存"
+        },
+        "channels.qq.imageGenModel": {
+          "label": "生图模型",
+          "help": "格式 provider/model，如 openai/dall-e-3"
+        },
+        "channels.qq.imageGenKeywords": {
+          "label": "生图触发关键词",
+          "help": "逗号分隔，如 \"生图:,画:,绘图:\""
+        },
+        "channels.qq.enableImageGen": {
+          "label": "启用生图",
+          "help": "需配置 imageGenModel"
+        },
+        "channels.qq.imageGenEndpoint": {
+          "label": "生图 API Endpoint",
+          "help": "自定义生图端点，留空用默认"
+        },
+        "channels.qq.imageGenApiKey": {
+          "label": "生图 API Key",
+          "help": "留空则使用模型配置中的默认 Key",
+          "sensitive": true
+        },
+        "channels.qq.imageGenQuality": {
+          "label": "生图质量",
+          "help": "standard 或 hd"
+        },
+        "channels.qq.imageGenSize": {
+          "label": "生图尺寸",
+          "help": "如 1024x1024"
+        },
+        "channels.qq.imageGenStyle": {
+          "label": "生图风格",
+          "help": "vivid（生动）或 natural（自然）"
+        },
+        "channels.qq.imageGenRateLimitMs": {
+          "label": "生图速率限制（毫秒）",
+          "help": "两次生图最小间隔"
+        },
+        "channels.qq.imageGenAsyncMode": {
+          "label": "生图异步模式",
+          "help": "true=异步轮询，false=同步返回"
+        },
+        "channels.qq.politicalModeration": {
+          "label": "政治言论审核",
+          "help": "开启后检测群消息中的政治言论并撤回"
+        },
+        "channels.qq.politicalModerationCooldownMs": {
+          "label": "审核提示冷却（毫秒）",
+          "help": "同群窗口内只发一次原因提示"
+        },
+        "channels.qq.politicalModerationModel": {
+          "label": "政治审核模型",
+          "help": "格式 provider/model，留空用主模型"
+        },
+        "channels.qq.politicalModerationTimeoutMs": {
+          "label": "审核超时（毫秒）",
+          "help": "审核 API 请求超时时间"
+        },
+        "channels.qq.debugPoliticalModeration": {
+          "label": "审核调试日志",
+          "help": "开启详细审核日志"
+        },
+        "channels.qq.primaryModel": {
+          "label": "主模型",
+          "help": "格式 provider/model，留空用列表第一个"
+        },
+        "channels.qq.fallbackModels": {
+          "label": "回退模型",
+          "help": "主模型失败后按顺序回退，逗号分隔"
+        }
       }
     }
   },
