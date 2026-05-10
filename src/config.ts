@@ -92,6 +92,8 @@ export const QQConfigSchema = z.object({
   antiRiskMode: BooleanInputSchema(false).describe("风控规避模式（例如处理 URL 发送样式）。"),
   allowedGroups: IdListStringSchema.describe("允许响应的群号白名单（字符串）。Web表单填：20000001 123456789；Raw JSON 填：\"20000001 123456789\"。"),
   blockedUsers: IdListStringSchema.describe("用户黑名单QQ号（字符串）。Web表单填：30000001 或 30000001,10002；Raw JSON 填：\"30000001\"。"),
+  allowedPrivateChat: BooleanInputSchema(false).describe("启用私聊白名单。开启后只有 allowedPrivateUsers 中的用户可私聊触发。"),
+  allowedPrivateUsers: IdListStringSchema.describe("私聊白名单QQ号（字符串）。仅 allowedPrivateChat=true 时生效。Web表单填：10001,123456789；Raw JSON 填：\"10001,123456789\"。"),
   historyLimit: NumberInputSchema(0).describe("群历史注入条数。默认0（推荐，依赖会话系统）；需强保留原文时可设 3~5。"),
   keywordOnlyTrigger: BooleanInputSchema(false).describe("群聊仅关键词触发开关。开启后，@机器人/回复机器人消息不再触发；建议配合 keywordTriggers 一起使用。适合与其他机器人共用同一 QQ 账号时避免双重回复。"),
   keywordTriggers: KeywordTriggersSchema.describe("关键词触发（字符串）。Web表单填：小助手, 帮我；Raw JSON 填：\"小助手, 帮我\"。当 requireMention=true 时，命中关键词可不@直接触发；当 requireMention=false 时，关键词不是必需条件；当 keywordOnlyTrigger=true 时，群聊里只有命中这些关键词才会触发。"),

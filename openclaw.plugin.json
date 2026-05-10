@@ -124,6 +124,14 @@
             "default": "",
             "type": "string"
           },
+          "allowedPrivateChat": {
+            "default": false,
+            "type": "boolean"
+          },
+          "allowedPrivateUsers": {
+            "default": "",
+            "type": "string"
+          },
           "historyLimit": {
             "default": 0,
             "type": "number"
@@ -444,6 +452,14 @@
         "blockedUsers": {
           "label": "用户黑名单",
           "help": "屏蔽指定用户，逗号分隔"
+        },
+        "allowedPrivateChat": {
+          "label": "启用私聊白名单",
+          "help": "开启后只有白名单中的用户可私聊触发机器人"
+        },
+        "allowedPrivateUsers": {
+          "label": "私聊白名单",
+          "help": "允许私聊触发的用户QQ号，逗号/空格分隔。需先开启\"启用私聊白名单\""
         },
         "historyLimit": {
           "label": "群历史注入条数",

@@ -3708,6 +3708,8 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
             const adminIds = [...new Set(parseIdListInput(config.admins as string | number | Array<string | number> | undefined))];
             const allowedGroupIds = [...new Set(parseIdListInput(config.allowedGroups as string | number | Array<string | number> | undefined))];
             const blockedUserIds = [...new Set(parseIdListInput(config.blockedUsers as string | number | Array<string | number> | undefined))];
+            const allowedPrivateUserIds = [...new Set(parseIdListInput(config.allowedPrivateUsers as string | number | Array<string | number> | undefined))];
+            const allowedPrivateChat = config.allowedPrivateChat === true;
             const blockedNotifyCooldownMs = Math.max(0, Number(config.blockedNotifyCooldownMs ?? 10000));
 
             const debugPoliticalModeration = config.debugPoliticalModeration === true;
@@ -3962,6 +3964,7 @@ export const qqChannel: ChannelPlugin<ResolvedQQAccount> = {
 
                     if (blockedUserIds.includes(userId)) return;
                     if (isGroup && allowedGroupIds.length && !allowedGroupIds.includes(groupId)) return;
+                    if (allowedPrivateChat && !isGroup && !isGuild && allowedPrivateUserIds.length && !allowedPrivateUserIds.includes(userId)) return;
 
                     const isAdmin = adminIds.includes(userId);
                     await ensureTempSessionSlotsLoaded();
